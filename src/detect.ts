@@ -90,7 +90,9 @@ export async function readAcquisitionRecord(config: Config, filePath: string): P
     if (name && value !== undefined) entries.set(name, value);
   }
 
-  log.debug('read acquisition metadata', { entries: entries.size });
+  // The raw count separates "exiftool reported nothing" from "it reported tags
+  // that did not pair up", which are different problems with the same symptom.
+  log.debug('read acquisition metadata', { entries: entries.size, rawTags: Object.keys(record).length });
   return entries;
 }
 

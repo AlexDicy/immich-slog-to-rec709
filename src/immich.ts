@@ -1,5 +1,6 @@
 import { createWriteStream } from 'node:fs';
 import { openAsBlob } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import type { Config } from './config.js';
@@ -103,10 +104,32 @@ export class ImmichClient {
     return this.json<Asset>('GET', `/assets/${id}`);
   }
 
+  /**
+   * A short read does not necessarily look like an error from the client's side: a
+   * connection closed on a chunk boundary ends the stream cleanly and leaves a file
+   * that still parses, because these clips carry moov ahead of mdat. The container
+   * and its color tags would read fine while the timed metadata track inside mdat
+   * was missing, so detection would report no picture profile rather than the
+   * truth, and the clip would be skipped or graded from a truncated source. The
+   * length is therefore checked rather than trusted.
+   */
   async downloadOriginal(id: string, destinationPath: string): Promise<void> {
     const response = await this.request('GET', `/assets/${id}/original`);
     if (!response.body) throw new Error(`asset ${id} download returned an empty body`);
     await pipeline(Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]), createWriteStream(destinationPath));
+
+    const header = response.headers.get('content-length');
+    const declared = header === null ? null : Number(header);
+    const { size } = await stat(destinationPath);
+
+    if (declared === null || !Number.isFinite(declared)) {
+      log.warn('the download sent no length, so it could not be verified', { id, bytes: size });
+      return;
+    }
+    if (size !== declared) {
+      throw new Error(`asset ${id} download is incomplete: wrote ${size} of ${declared} bytes`);
+    }
+    log.debug('download verified', { id, bytes: size });
   }
 
   async upload(options: {
