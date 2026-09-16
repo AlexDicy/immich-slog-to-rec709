@@ -1,0 +1,23 @@
+{
+  "name": "immich-slog-grader",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Detects S-Log videos in Immich and adds a Rec.709 graded version, stacked over the original",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "serve": "node dist/index.js serve",
+    "backfill": "node dist/index.js backfill",
+    "selftest": "node dist/index.js selftest",
+    "make-lut": "node tools/make-lut.mjs",
+    "verify-lut": "node tools/make-lut.mjs --verify",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}

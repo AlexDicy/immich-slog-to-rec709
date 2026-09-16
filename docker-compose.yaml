@@ -1,0 +1,29 @@
+# Add this service to the same Compose project as Immich, or run it separately and
+# point IMMICH_URL at your server. It only needs HTTP access to the Immich API, and
+# Immich needs HTTP access back to port 8710 for the workflow webhook.
+
+services:
+  slog-grader:
+    build: .
+    # Or, once you have pushed an image somewhere:
+    # image: ghcr.io/alexdicy/immich-slog-to-rec709:latest
+    container_name: slog-grader
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Resolves over the Compose network when this runs alongside Immich.
+      IMMICH_URL: http://immich-server:2283
+    volumes:
+      # Scratch space for the download, the graded file, and nothing else.
+      # Size it for roughly three times your largest clip.
+      - slog-grader-work:/work
+      # Drop your own .cube files here and point LUT_PATH at one to override
+      # the generated neutral conversion.
+      - ./luts:/app/luts:ro
+    ports:
+      # Only needed if Immich runs outside this Compose network.
+      - '8710:8710'
+
+volumes:
+  slog-grader-work:

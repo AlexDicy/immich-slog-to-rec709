@@ -1,0 +1,36 @@
+{
+  "name": "S-Log to Rec.709",
+  "description": "Sends newly uploaded Sony camera videos to the grader, which adds a Rec.709 version stacked over the S-Log original.",
+  "enabled": true,
+  "logging": true,
+  "trigger": "AssetMetadataExtraction",
+  "steps": [
+    {
+      "method": "immich-plugin-core#assetTypeFilter",
+      "enabled": true,
+      "config": {
+        "allowedTypes": ["VIDEO"]
+      }
+    },
+    {
+      "method": "immich-plugin-core#assetExifFilter",
+      "enabled": true,
+      "config": {
+        "property": "model",
+        "pattern": "ZV-E1",
+        "matchType": "contains",
+        "caseSensitive": false
+      }
+    },
+    {
+      "method": "immich-plugin-core#webhook",
+      "enabled": true,
+      "config": {
+        "url": "http://slog-grader:8710/webhook",
+        "method": "POST",
+        "headerName": "x-grader-token",
+        "headerValue": "replace-with-your-WEBHOOK_TOKEN"
+      }
+    }
+  ]
+}
