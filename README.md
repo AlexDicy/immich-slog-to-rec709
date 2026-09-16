@@ -1,5 +1,7 @@
 # immich-slog-to-rec709
 
+**This repository uses LLM tools for code generation**
+
 Detects S-Log videos uploaded to [Immich](https://immich.app) and adds a Rec.709 graded version, stacked over the S-Log original so the graded one is what you see in the timeline.
 
 Built for a Sony ZV-E1 shooting S-Log3 / S-Gamut3.Cine.
