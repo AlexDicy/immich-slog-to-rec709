@@ -67,6 +67,9 @@ Do not use `ffprobe`'s `color_transfer` for this.
 S-Log3 has no assigned transfer-characteristics code in the H.264 or HEVC specs, so the container cannot describe it and does not try: a ZV-E1 clip arrives with no transfer and no primaries set at all, tagged only as full range.
 The Sony metadata is the only reliable signal.
 
+A clip whose acquisition metadata cannot be read at all is skipped *without* being marked, so the next run looks at it again.
+Metadata that says `rec709` is a decision and gets recorded; finding no metadata is not a decision, and recording it would let a missing or too old exiftool quietly turn the library into one with apparently no S-Log in it, with the markers then preventing every clip from being reconsidered after the tooling was fixed.
+
 If your uploads arrive with that metadata stripped, `PIXEL_FALLBACK_ENABLED=true` turns on a weaker heuristic based on luma statistics.
 Check before relying on it: download a clip back out of Immich and run the exiftool command above on it.
 

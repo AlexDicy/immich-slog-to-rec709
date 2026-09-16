@@ -96,6 +96,19 @@ export class Pipeline {
       log.info('detection result', { ...fields, isLog: detection.isLog, method: detection.method, reason: detection.reason });
 
       if (!detection.isLog) {
+        // Metadata that says "rec709" is a decision worth recording. Finding no
+        // metadata at all is not: it is what a missing or too old exiftool looks
+        // like, and recording it would turn that into a library with apparently no
+        // S-Log in it, where the markers then stop every clip from being
+        // reconsidered once the tooling is fixed.
+        if (detection.method === 'none') {
+          log.warn('no acquisition metadata found, leaving the asset unmarked so it is reconsidered later', {
+            ...fields,
+            reason: detection.reason,
+          });
+          return { action: 'skipped', reason: detection.reason };
+        }
+
         await this.mark(assetId, {
           status: 'not-log',
           version: MARKER_VERSION,
