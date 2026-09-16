@@ -1,0 +1,4 @@
+# Keep line endings LF in the repo so files read inside the Linux container
+# are not affected by a Windows checkout.
+* text=auto eol=lf
+*.cube text eol=lf
