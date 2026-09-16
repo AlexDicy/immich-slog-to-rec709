@@ -1,0 +1,67 @@
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { basename } from 'node:path';
+import type { Config } from './config.js';
+
+/**
+ * The encode parameters that decide what the graded file looks like, recorded on
+ * the asset so a later run can tell whether the settings have moved on.
+ *
+ * The LUT is identified by name and by a hash of its contents rather than by its
+ * path, because the path differs between a container and a local run while the
+ * result is identical, and because a LUT can be edited in place without its name
+ * changing. Only things that change the output belong here: adding a field that
+ * does not, such as the work directory, would make every clip look stale.
+ */
+export interface EncodeSettings {
+  crf: number;
+  preset: string;
+  maxHeight: number;
+  maxBitrate: number;
+  audioBitrate: string;
+  lut: string;
+  lutHash: string;
+}
+
+const hashCache = new Map<string, string>();
+
+async function lutHash(path: string): Promise<string> {
+  const cached = hashCache.get(path);
+  if (cached) return cached;
+  const hash = createHash('sha256').update(await readFile(path)).digest('hex').slice(0, 12);
+  hashCache.set(path, hash);
+  return hash;
+}
+
+export async function currentSettings(config: Config): Promise<EncodeSettings> {
+  return {
+    crf: config.encodeCrf,
+    preset: config.encodePreset,
+    maxHeight: config.encodeMaxHeight,
+    maxBitrate: config.encodeMaxBitrate,
+    audioBitrate: config.audioBitrate,
+    lut: basename(config.lutPath),
+    lutHash: await lutHash(config.lutPath),
+  };
+}
+
+/**
+ * Whether a recorded settings block still matches. Anything unrecognizable,
+ * including the absence of a block, counts as a mismatch: a marker written before
+ * this was tracked cannot be shown to match, and reprocessing it is the safe
+ * reading of "the settings changed".
+ */
+export function settingsMatch(recorded: unknown, current: EncodeSettings): boolean {
+  if (!recorded || typeof recorded !== 'object') return false;
+  const value = recorded as Record<string, unknown>;
+  return (Object.keys(current) as (keyof EncodeSettings)[]).every((key) => value[key] === current[key]);
+}
+
+export function describeSettingsDrift(recorded: unknown, current: EncodeSettings): string {
+  if (!recorded || typeof recorded !== 'object') return 'no settings were recorded';
+  const value = recorded as Record<string, unknown>;
+  const drifted = (Object.keys(current) as (keyof EncodeSettings)[])
+    .filter((key) => value[key] !== current[key])
+    .map((key) => `${key} ${JSON.stringify(value[key])} -> ${JSON.stringify(current[key])}`);
+  return drifted.length > 0 ? drifted.join(', ') : 'settings match';
+}

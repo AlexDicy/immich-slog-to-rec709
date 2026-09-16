@@ -13,7 +13,10 @@ const USAGE = `Usage: node dist/index.js <command>
 Commands:
   serve                     Listen for Immich workflow webhooks and grade what arrives
   backfill [--list]         Run over videos already in the library
-           [--limit N]
+           [--limit N]      --list prints candidates and downloads nothing
+           [--force]        --force regrades everything, ignoring the markers
+           [--changed]      --changed regrades what was graded with settings
+                            that no longer match, replacing the old output
   selftest                  Check the tools and verify the LUT renders known values correctly
 
 Configuration is read from the environment. See .env.example.`;

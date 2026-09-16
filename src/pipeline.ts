@@ -4,6 +4,8 @@ import type { Config } from './config.js';
 import { ImmichClient, type Asset } from './immich.js';
 import { detect, probe } from './detect.js';
 import { grade } from './grade.js';
+import { writeSourceMetadata } from './metadata.js';
+import { currentSettings, type EncodeSettings } from './settings.js';
 import { log, errorMessage } from './log.js';
 
 export type Outcome =
@@ -12,17 +14,22 @@ export type Outcome =
   | { action: 'failed'; reason: string };
 
 /** Written to the asset so a rerun can tell what was already decided and why. */
-interface Marker {
+export interface Marker {
   status: 'graded' | 'not-log' | 'graded-output';
-  version: 1;
+  /** Read as written by whichever version wrote it, so old markers still parse. */
+  version: number;
   at: string;
   gamma?: string | null;
   method?: string;
   reason?: string;
   gradedAssetId?: string;
   sourceAssetId?: string;
-  lut?: string;
+  /** Absent on markers written before the settings were tracked. */
+  settings?: EncodeSettings;
 }
+
+/** Bumped when the marker's shape changes. Version 1 recorded `lut` as a path. */
+const MARKER_VERSION = 2;
 
 export class Pipeline {
   constructor(
@@ -30,35 +37,44 @@ export class Pipeline {
     private readonly immich: ImmichClient,
   ) {}
 
-  /** Cheap checks that need no download, so the common case costs one API call. */
-  private async screen(asset: Asset): Promise<string | null> {
-    if (asset.type !== 'VIDEO') return `asset type is ${asset.type}`;
-    if (asset.isTrashed) return 'asset is in the trash';
+  /**
+   * Cheap checks that need no download, so the common case costs one API call.
+   * The marker is returned either way, because a reprocess needs what it recorded.
+   */
+  private async screen(asset: Asset, reprocess: boolean): Promise<{ skip: string | null; marker: Marker | null }> {
+    if (asset.type !== 'VIDEO') return { skip: `asset type is ${asset.type}`, marker: null };
+    if (asset.isTrashed) return { skip: 'asset is in the trash', marker: null };
 
     const { name } = parsePath(asset.originalFileName);
-    if (name.endsWith(this.config.gradedSuffix)) return 'filename marks this as a graded output';
+    if (name.endsWith(this.config.gradedSuffix)) return { skip: 'filename marks this as a graded output', marker: null };
 
     const marker = (await this.immich.getMetadataKey(asset.id, this.config.metadataKey)) as Marker | null;
-    if (marker?.status) return `already handled: ${marker.status}`;
+    if (marker?.status && !reprocess) return { skip: `already handled: ${marker.status}`, marker };
 
-    if (asset.stack && asset.stack.primaryAssetId !== asset.id) return 'asset is already stacked under another asset';
+    // A reprocess expects to find its own previous output stacked on top of this
+    // asset. Any other stack means the asset belongs to something else.
+    const stackedElsewhere = Boolean(asset.stack) && asset.stack?.primaryAssetId !== asset.id;
+    const ownStack = reprocess && Boolean(marker?.gradedAssetId) && asset.stack?.primaryAssetId === marker?.gradedAssetId;
+    if (stackedElsewhere && !ownStack) return { skip: 'asset is already stacked under another asset', marker };
 
     const models = this.config.cameraModels;
     if (models.length > 0) {
       const model = asset.exifInfo?.model ?? '';
       if (!models.some((candidate) => model.toLowerCase().includes(candidate.toLowerCase()))) {
-        return `camera model "${model || 'unknown'}" is not in CAMERA_MODELS`;
+        return { skip: `camera model "${model || 'unknown'}" is not in CAMERA_MODELS`, marker };
       }
     }
 
-    return null;
+    return { skip: null, marker };
   }
 
-  async process(assetId: string): Promise<Outcome> {
+  /** `reprocess` regrades an asset that already carries a marker, replacing its output. */
+  async process(assetId: string, options: { reprocess?: boolean } = {}): Promise<Outcome> {
+    const reprocess = options.reprocess ?? false;
     const asset = await this.immich.getAsset(assetId);
     const fields = { assetId, file: asset.originalFileName };
 
-    const skipReason = await this.screen(asset);
+    const { skip: skipReason, marker } = await this.screen(asset, reprocess);
     if (skipReason) {
       log.info('skipping', { ...fields, reason: skipReason });
       return { action: 'skipped', reason: skipReason };
@@ -82,7 +98,7 @@ export class Pipeline {
       if (!detection.isLog) {
         await this.mark(assetId, {
           status: 'not-log',
-          version: 1,
+          version: MARKER_VERSION,
           at: new Date().toISOString(),
           gamma: detection.gamma,
           method: detection.method,
@@ -103,6 +119,20 @@ export class Pipeline {
       log.info('applying LUT', { ...fields, resolution: `${sourceProbe.width}x${sourceProbe.height}`, pixelFormat: sourceProbe.pixelFormat });
       await grade(this.config, { inputPath: originalPath, outputPath: gradedPath, probe: sourceProbe });
 
+      await writeSourceMetadata(this.config, gradedPath, asset.exifInfo);
+
+      const settings = await currentSettings(this.config);
+      const gradedMarker: Marker = {
+        status: 'graded-output',
+        version: MARKER_VERSION,
+        at: new Date().toISOString(),
+        sourceAssetId: assetId,
+        settings,
+      };
+
+      // The marker goes out with the upload rather than in a call after it, so the
+      // graded asset carries it from the moment it exists. Its own workflow webhook
+      // can then only ever see it already marked, and is screened out.
       log.info('uploading graded version', { ...fields, filename: gradedName });
       const upload = await this.immich.upload({
         filePath: gradedPath,
@@ -110,36 +140,50 @@ export class Pipeline {
         fileCreatedAt: asset.fileCreatedAt,
         fileModifiedAt: asset.fileModifiedAt,
         duration: asset.duration,
+        metadata: [{ key: this.config.metadataKey, value: gradedMarker as unknown as Record<string, unknown> }],
       });
 
       if (upload.status === 'duplicate') {
+        // Immich matched an existing asset and returned that instead, so nothing
+        // sent with the upload was applied to it.
         log.warn('Immich reported the graded upload as a duplicate', { ...fields, gradedAssetId: upload.id });
+        await this.mark(upload.id, gradedMarker);
       }
 
-      // Mark the graded asset first, so that if its own webhook arrives while the
-      // rest of this runs, it is screened out rather than graded again.
-      await this.mark(upload.id, {
-        status: 'graded-output',
-        version: 1,
-        at: new Date().toISOString(),
-        sourceAssetId: assetId,
-        lut: this.config.lutPath,
-      });
+      // Only once the replacement exists, so a failed encode or upload never
+      // leaves the asset with nothing stacked over it. A byte identical re-encode
+      // comes back as a duplicate of the asset being replaced, and that one has to
+      // be kept rather than deleted.
+      const supersededId = marker?.gradedAssetId;
+      if (supersededId && supersededId !== upload.id) {
+        try {
+          await this.immich.deleteAssets([supersededId]);
+          log.info('moved the superseded graded version to the trash', { ...fields, supersededId });
+        } catch (error) {
+          log.warn('could not remove the superseded graded version', { ...fields, supersededId, error: errorMessage(error) });
+        }
+      }
 
       await this.mark(assetId, {
         status: 'graded',
-        version: 1,
+        version: MARKER_VERSION,
         at: new Date().toISOString(),
         gamma: detection.gamma,
         method: detection.method,
         gradedAssetId: upload.id,
-        lut: this.config.lutPath,
+        settings,
       });
 
       if (this.config.stackAssets) {
-        // First id becomes the stack cover, so the graded version is what you see.
-        await this.immich.createStack([upload.id, assetId]);
-        log.info('stacked graded version over original', { ...fields, gradedAssetId: upload.id });
+        try {
+          // First id becomes the stack cover, so the graded version is what you see.
+          await this.immich.createStack([upload.id, assetId]);
+          log.info('stacked graded version over original', { ...fields, gradedAssetId: upload.id });
+        } catch (error) {
+          // The graded version is uploaded and marked by this point, so failing the
+          // whole clip over the stack would throw away the expensive part.
+          log.warn('could not stack the graded version over the original', { ...fields, error: errorMessage(error) });
+        }
       }
 
       if (this.config.tagAssets) {

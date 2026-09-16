@@ -8,10 +8,20 @@ import { log } from './log.js';
 export interface ExifInfo {
   make?: string | null;
   model?: string | null;
+  lensModel?: string | null;
   exifImageWidth?: number | null;
   exifImageHeight?: number | null;
   fileSizeInByte?: number | null;
   dateTimeOriginal?: string | null;
+  timeZone?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  iso?: number | null;
+  fNumber?: number | null;
+  exposureTime?: string | null;
+  focalLength?: number | null;
+  description?: string | null;
+  rating?: number | null;
 }
 
 export interface Asset {
@@ -21,7 +31,8 @@ export interface Asset {
   originalPath: string;
   fileCreatedAt: string;
   fileModifiedAt: string;
-  duration: string;
+  /** Milliseconds, and null for anything that is not a video. */
+  duration: number | null;
   isTrashed: boolean;
   visibility: string;
   exifInfo?: ExifInfo | null;
@@ -103,8 +114,10 @@ export class ImmichClient {
     filename: string;
     fileCreatedAt: string;
     fileModifiedAt: string;
-    duration?: string;
+    duration?: number | null;
     visibility?: 'timeline' | 'archive' | 'hidden' | 'locked';
+    /** Applied as the asset is created, so it is never visible without them. */
+    metadata?: MetadataItem[];
   }): Promise<UploadResult> {
     // openAsBlob streams from disk, so a multi-gigabyte clip never lands in memory.
     const blob = await openAsBlob(options.filePath, { type: 'video/mp4' });
@@ -113,8 +126,11 @@ export class ImmichClient {
     form.set('filename', options.filename);
     form.set('fileCreatedAt', options.fileCreatedAt);
     form.set('fileModifiedAt', options.fileModifiedAt);
-    if (options.duration) form.set('duration', options.duration);
+    // The endpoint coerces this from a string and wants milliseconds.
+    if (options.duration != null) form.set('duration', String(options.duration));
     if (options.visibility) form.set('visibility', options.visibility);
+    // This field is parsed as JSON before it is validated, so it goes out encoded.
+    if (options.metadata?.length) form.set('metadata', JSON.stringify(options.metadata));
 
     // Leave Content-Type unset so fetch generates the multipart boundary.
     const response = await this.request('POST', '/assets', { body: form });
@@ -149,6 +165,14 @@ export class ImmichClient {
 
   async bulkTagAssets(tagIds: string[], assetIds: string[]): Promise<void> {
     await this.json('PUT', '/tags/assets', { tagIds, assetIds });
+  }
+
+  /**
+   * Moves assets to the trash, where they stay recoverable until it is emptied.
+   * Only `permanent` skips that, and nothing in this service asks for it.
+   */
+  async deleteAssets(assetIds: string[], options: { permanent?: boolean } = {}): Promise<void> {
+    await this.json('DELETE', '/assets', { ids: assetIds, force: options.permanent ?? false });
   }
 
   async setVisibility(assetIds: string[], visibility: 'timeline' | 'archive'): Promise<void> {

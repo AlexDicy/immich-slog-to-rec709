@@ -39,6 +39,7 @@ Upload (phone app, CLI, web, external library)
         +-- GET /assets/:id/original            download the clip
         +-- exiftool -ee acquisition metadata   is it actually S-Log?
         +-- ffmpeg lut3d                        apply the Rec.709 LUT
+        +-- exiftool -Make -GPSLatitude ...     carry the camera and GPS data over
         +-- POST /assets                        upload NAME_rec709.mp4
         +-- POST /stacks                        stack it over the original, graded on top
         +-- PUT /assets/:id/metadata            record what was done
@@ -68,6 +69,20 @@ The Sony metadata is the only reliable signal.
 
 If your uploads arrive with that metadata stripped, `PIXEL_FALLBACK_ENABLED=true` turns on a weaker heuristic based on luma statistics.
 Check before relying on it: download a clip back out of Immich and run the exiftool command above on it.
+
+## What the graded copy carries over
+
+FFmpeg copies the container tags, which covers the capture dates, but the camera, exposure, and GPS values live in the timed metadata track it does not copy.
+That track could not be copied verbatim anyway, because it states the clip is S-Log3, which the graded file is not.
+
+So the service writes those values onto the graded file with exiftool, taking them from what Immich already extracted from the original: make, model, lens, ISO, f-number, exposure time, GPS, description, and rating.
+They go into an XMP box placed after `moov`, so faststart survives, although inserting it does rewrite the file.
+
+The GPS pair matters for more than the map pin.
+Immich infers the time zone from the coordinates, and with none present it falls back to UTC, which leaves the graded copy displaying a different time than the original it is stacked with.
+
+Sony's per-frame acquisition record, which carries the picture profile and the lens telemetry, is not carried over.
+Nothing Immich displays comes from it.
 
 ## Setup
 
@@ -101,6 +116,7 @@ Check before relying on it: download a clip back out of Immich and run the exift
 | `asset.update` | writing the marker, and archiving the original when `ARCHIVE_ORIGINAL=true` |
 | `stack.create` | stacking the graded version over the original, when `STACK_ASSETS=true` |
 | `tag.create` and `tag.asset` | tagging both versions, when `TAG_ASSETS=true` |
+| `asset.delete` | replacing a superseded graded version, only on `backfill --force` or `--changed` |
 
 Turning `STACK_ASSETS` and `TAG_ASSETS` off leaves only the four `asset.` permissions.
 `GET /server/ping`, which the service calls at startup to fail fast on an unreachable server, is public and needs none of them.
@@ -129,7 +145,23 @@ Start with `--limit 1` and look at the result in Immich before running the whole
 ## Reprocessing
 
 Every asset it touches gets a `slog-grader` metadata key recording the decision, which is also how it avoids doing the same work twice.
-To force a clip to be reprocessed, delete that key:
+On a graded asset that record includes the settings which produced the output: CRF, preset, maximum height, maximum bitrate, audio bitrate, and the LUT's name and a hash of its contents.
+
+```
+docker compose exec slog-grader node dist/index.js backfill --changed --list
+docker compose exec slog-grader node dist/index.js backfill --changed
+```
+
+`--changed` regrades the clips whose recorded settings no longer match the current configuration, and leaves the rest alone.
+The LUT is compared by content rather than by path, so editing a `.cube` in place counts as a change while moving or renaming the file does not.
+A clip graded before those settings were recorded also counts as changed, because a match cannot be shown.
+
+`--force` ignores the records entirely, which also means it revisits clips that were previously skipped as not being S-Log, running detection over them again.
+
+Either way the superseded graded version is moved to the trash, and only after its replacement has been uploaded, so a failed encode never leaves a clip with nothing stacked over it and a regrade you dislike can be recovered.
+This is the one thing that needs `asset.delete` on the API key.
+
+To make a single clip eligible again without a full `--force`, delete its record:
 
 ```
 curl -X DELETE -H "x-api-key: $IMMICH_API_KEY" \
