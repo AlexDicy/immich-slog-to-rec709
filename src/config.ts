@@ -45,7 +45,7 @@ export function loadConfig() {
     webhookToken: optionalEnv('WEBHOOK_TOKEN', ''),
     webhookHeader: optionalEnv('WEBHOOK_HEADER', 'x-grader-token').toLowerCase(),
 
-    lutPath: optionalEnv('LUT_PATH', '/app/luts/slog3-to-rec709.cube'),
+    lutPath: optionalEnv('LUT_PATH', '/app/luts/lc_709_type_a.cube'),
     workDir: optionalEnv('WORK_DIR', '/tmp/slog-grader'),
     ffmpegPath: optionalEnv('FFMPEG_PATH', 'ffmpeg'),
     ffprobePath: optionalEnv('FFPROBE_PATH', 'ffprobe'),

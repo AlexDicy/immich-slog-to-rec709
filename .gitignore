@@ -2,3 +2,11 @@ node_modules/
 dist/
 .env
 *.log
+
+.idea/
+.vscode/
+
+testing-binaries/
+
+slog_example.mp4
+luts/generated-*.cube

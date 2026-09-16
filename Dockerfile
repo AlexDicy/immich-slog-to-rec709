@@ -23,7 +23,7 @@ COPY luts ./luts
 
 ENV NODE_ENV=production \
     WORK_DIR=/work \
-    LUT_PATH=/app/luts/slog3-to-rec709.cube \
+    LUT_PATH=/app/luts/lc_709_type_a.cube \
     PORT=8710
 
 RUN mkdir -p /work && chown node:node /work

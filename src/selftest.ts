@@ -1,10 +1,11 @@
-import { mkdir, rm, readFile } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Config } from './config.js';
 import { run, runBinary, commandExists } from './exec.js';
 import { buildFilterChain } from './grade.js';
 import { probe } from './detect.js';
-import { log } from './log.js';
+import { loadCube, sampleCube, type Cube } from './cube.js';
+import { log, errorMessage } from './log.js';
 
 /**
  * Verifies the grading chain end to end without needing a camera file.
@@ -21,23 +22,29 @@ const HEIGHT = 64;
 const FRAMES = 6;
 const NEUTRAL_CHROMA_10BIT = 512;
 
-/** S-Log3 reference code values and the Rec.709 8-bit value each should render to. */
+/**
+ * S-Log3 reference code values to test, from Sony's technical summary.
+ *
+ * The expected output is not hardcoded. It is read from whichever LUT is loaded, by
+ * sampling it the same way FFmpeg will, so these checks prove that the code values
+ * reach the LUT unshifted and come back out correctly encoded. That is a property of
+ * the filter chain, not of any particular LUT, so swapping in a different .cube does
+ * not invalidate the test.
+ */
 interface Patch {
   name: string;
   slogCode: number;
-  expected8Bit: number;
-  tolerance: number;
 }
 
-// Expected values come from interpolating the generated LUT on its neutral axis.
-// The tolerances absorb the 33-point LUT's interpolation error plus H.264 and
-// 4:2:0 rounding, both of which are worth a unit or two at 8 bits.
 const PATCHES: Patch[] = [
-  { name: 'S-Log3 black (code 95)', slogCode: 95, expected8Bit: 0, tolerance: 3 },
-  { name: 'S-Log3 18% gray (code 420)', slogCode: 420, expected8Bit: 104, tolerance: 4 },
-  { name: 'S-Log3 90% white (code 598)', slogCode: 598, expected8Bit: 186, tolerance: 5 },
-  { name: 'S-Log3 +4 stops (code 729)', slogCode: 729, expected8Bit: 231, tolerance: 5 },
+  { name: 'S-Log3 black (code 95)', slogCode: 95 },
+  { name: 'S-Log3 18% gray (code 420)', slogCode: 420 },
+  { name: 'S-Log3 90% white (code 598)', slogCode: 598 },
+  { name: 'S-Log3 +4 stops (code 729)', slogCode: 729 },
 ];
+
+// Absorbs H.264 quantization, 4:2:0 chroma handling, and the limited-range round trip.
+const TOLERANCE_8BIT = 5;
 
 /** One frame of yuv422p10le at a flat neutral luma. */
 function buildFrame(lumaCode: number): Buffer {
@@ -52,7 +59,14 @@ function buildFrame(lumaCode: number): Buffer {
   return Buffer.concat([luma, chroma, chroma]);
 }
 
-async function renderPatch(config: Config, workDir: string, patch: Patch): Promise<{ r: number; g: number; b: number }> {
+/** What the loaded LUT says a neutral S-Log3 code value becomes, as 8-bit Rec.709. */
+function predict(cube: Cube, slogCode: number): [number, number, number] {
+  const input = slogCode / 1023;
+  const output = sampleCube(cube, [input, input, input]);
+  return output.map((value) => Math.round(Math.min(1, Math.max(0, value)) * 255)) as [number, number, number];
+}
+
+async function renderPatch(config: Config, workDir: string, patch: Patch): Promise<[number, number, number]> {
   const sourcePath = join(workDir, `source-${patch.slogCode}.mp4`);
   const gradedPath = join(workDir, `graded-${patch.slogCode}.mp4`);
 
@@ -111,11 +125,11 @@ async function renderPatch(config: Config, workDir: string, patch: Patch): Promi
 
   // Sample the middle of the frame to stay clear of any edge filtering.
   const centerOffset = ((HEIGHT / 2) * WIDTH + WIDTH / 2) * 3;
-  return {
-    r: decodedGraded[centerOffset] ?? -1,
-    g: decodedGraded[centerOffset + 1] ?? -1,
-    b: decodedGraded[centerOffset + 2] ?? -1,
-  };
+  return [
+    decodedGraded[centerOffset] ?? -1,
+    decodedGraded[centerOffset + 1] ?? -1,
+    decodedGraded[centerOffset + 2] ?? -1,
+  ];
 }
 
 export async function selftest(config: Config): Promise<number> {
@@ -133,22 +147,28 @@ export async function selftest(config: Config): Promise<number> {
     check(`${name} is available`, await commandExists(command, [...args]), command);
   }
 
-  let lutHeader = '';
+  let cube: Cube | null = null;
   try {
-    const contents = await readFile(config.lutPath, 'utf8');
-    const sizeMatch = contents.match(/^LUT_3D_SIZE\s+(\d+)/m);
-    const entries = contents.split('\n').filter((line) => /^[-\d]/.test(line.trim())).length;
-    const size = Number(sizeMatch?.[1] ?? 0);
-    lutHeader = `size ${size}, ${entries} entries`;
-    check('LUT file is readable and complete', size > 1 && entries === size ** 3, lutHeader);
+    cube = await loadCube(config.lutPath);
+    check('LUT file parses and is complete', true, `${cube.size}^3 entries${cube.title ? `, "${cube.title}"` : ''}`);
   } catch (error) {
-    check('LUT file is readable and complete', false, `${config.lutPath}: ${(error as Error).message}`);
+    check('LUT file parses and is complete', false, `${config.lutPath}: ${errorMessage(error)}`);
   }
 
-  if (checks.some((c) => !c.pass)) {
+  if (!cube || checks.some((c) => !c.pass)) {
     log.error('prerequisites failed, skipping the render checks');
     return 1;
   }
+
+  // Where this LUT puts 18% gray. A neutral Rec.709 conversion lands on 104, but a
+  // creative look such as Sony's LC_709 may sit elsewhere, which is not a problem.
+  const grayPrediction = predict(cube, 420);
+  log.info('LUT reference points', {
+    lut: config.lutPath,
+    black95: predict(cube, 95).join(','),
+    gray420: grayPrediction.join(','),
+    white598: predict(cube, 598).join(','),
+  });
 
   const workDir = join(config.workDir, 'selftest');
   await rm(workDir, { recursive: true, force: true });
@@ -156,18 +176,17 @@ export async function selftest(config: Config): Promise<number> {
 
   try {
     for (const patch of PATCHES) {
-      const { r, g, b } = await renderPatch(config, workDir, patch);
-      const neutral = Math.max(Math.abs(r - g), Math.abs(g - b)) <= 3;
-      const onTarget = Math.abs(r - patch.expected8Bit) <= patch.tolerance;
-      check(
-        `${patch.name} renders neutral`,
-        neutral,
-        `rgb(${r}, ${g}, ${b})`,
+      const rendered = await renderPatch(config, workDir, patch);
+      const expected = predict(cube, patch.slogCode);
+      const worstDeviation = Math.max(
+        ...([0, 1, 2] as const).map((channel) =>
+          Math.abs((rendered[channel] as number) - (expected[channel] as number)),
+        ),
       );
       check(
-        `${patch.name} renders at 8-bit ${patch.expected8Bit}`,
-        onTarget,
-        `got ${r}, expected ${patch.expected8Bit} +/- ${patch.tolerance}`,
+        `${patch.name} matches what the LUT predicts`,
+        worstDeviation <= TOLERANCE_8BIT,
+        `rendered rgb(${rendered.join(', ')}), LUT predicts rgb(${expected.join(', ')}), worst off by ${worstDeviation}`,
       );
     }
   } finally {

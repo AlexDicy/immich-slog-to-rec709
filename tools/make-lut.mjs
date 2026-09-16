@@ -7,7 +7,7 @@
  * rather than a creative look. Drop in your own .cube if you want a specific look.
  *
  * Usage:
- *   node tools/make-lut.mjs [--out luts/slog3-to-rec709.cube] [--size 33]
+ *   node tools/make-lut.mjs [--out luts/generated-slog3-to-rec709.cube] [--size 33]
  *                           [--white 12] [--gray 0.18]
  *                           [--contrast 1.0] [--saturation 1.0]
  *                           [--verify]
@@ -332,7 +332,7 @@ function printExposureTable(tone, grayCode, contrast) {
 
 function parseArgs(argv) {
   const options = {
-    out: 'luts/slog3-to-rec709.cube',
+    out: 'luts/generated-slog3-to-rec709.cube',
     size: 33,
     white: 12,
     gray: 0.18,
