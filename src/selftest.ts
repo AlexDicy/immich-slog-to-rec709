@@ -5,6 +5,7 @@ import { run, runBinary, commandExists } from './exec.js';
 import { buildFilterChain } from './grade.js';
 import { probe } from './detect.js';
 import { loadCube, sampleCube, type Cube } from './cube.js';
+import { extractAssetId } from './server.js';
 import { log, errorMessage } from './log.js';
 
 /**
@@ -145,6 +146,31 @@ export async function selftest(config: Config): Promise<number> {
     ['exiftool', config.exiftoolPath, ['-ver']],
   ] as const) {
     check(`${name} is available`, await commandExists(command, [...args]), command);
+  }
+
+  // The webhook payload shape is not part of the Immich API spec, so it is pinned
+  // here: the event Immich actually posts has to parse, and nothing else carried in
+  // that same payload may be mistaken for the asset's own id.
+  const ID = '11111111-2222-3333-4444-555555555555';
+  const payloads: [string, string, string | null][] = [
+    [
+      'the event Immich posts',
+      JSON.stringify({
+        type: 'AssetV1',
+        trigger: 'AssetMetadataExtraction',
+        data: { asset: { id: ID, ownerId: '99999999-9999-9999-9999-999999999999', stackId: null } },
+      }),
+      ID,
+    ],
+    ['a bare asset object', JSON.stringify({ id: ID }), ID],
+    ['an asset wrapper', JSON.stringify({ asset: { id: ID } }), ID],
+    ['a payload carrying no asset id', JSON.stringify({ data: { asset: { ownerId: ID } } }), null],
+    ['a body that is not JSON', 'not json', null],
+    ['an id that is not a uuid', JSON.stringify({ id: '../../etc/passwd' }), null],
+  ];
+  for (const [name, body, expected] of payloads) {
+    const actual = extractAssetId(body);
+    check(`webhook payload, ${name}`, actual === expected, `got ${actual === null ? 'no id' : actual}`);
   }
 
   let cube: Cube | null = null;

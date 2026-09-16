@@ -25,22 +25,49 @@ async function readBody(request: IncomingMessage): Promise<string> {
 }
 
 /**
- * The webhook action sends the asset object as the request body. Only the id is
- * needed, and re-reading the asset from the API keeps this working even if the
- * payload shape changes between Immich releases.
+ * Only the id is taken from the body, and the asset is then re-read from the API,
+ * so a payload that grows or moves other fields between releases does not matter.
+ *
+ * Where the asset id sits in the body, most specific first.
+ *
+ * Immich 3.2 posts the whole event, `{type, trigger, data: {asset: {...}}}`, so
+ * `data.asset.id` is the real one. The shorter paths are kept because the payload
+ * shape is not part of the API spec and has no compatibility promise, and reading
+ * an id from the wrong place is worse than reading none: the service would go and
+ * grade some unrelated asset. Explicit paths are what keep that from happening,
+ * rather than searching the object for anything called `id`, which would also find
+ * the ids of the stack, the owner, or the tags carried in the same payload.
  */
-function extractAssetId(body: string): string | null {
+const ASSET_ID_PATHS = [
+  ['data', 'asset', 'id'],
+  ['asset', 'id'],
+  ['data', 'id'],
+  ['id'],
+] as const;
+
+export function extractAssetId(body: string): string | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(body);
   } catch {
     return null;
   }
-  if (typeof parsed !== 'object' || parsed === null) return null;
-  const record = parsed as Record<string, unknown>;
-  const candidate = record['id'] ?? (record['asset'] as Record<string, unknown> | undefined)?.['id'];
-  if (typeof candidate !== 'string') return null;
-  return /^[0-9a-fA-F-]{36}$/.test(candidate) ? candidate : null;
+
+  for (const path of ASSET_ID_PATHS) {
+    let current: unknown = parsed;
+    for (const key of path) {
+      if (typeof current !== 'object' || current === null) {
+        current = undefined;
+        break;
+      }
+      current = (current as Record<string, unknown>)[key];
+    }
+    if (typeof current === 'string' && /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(current)) {
+      return current;
+    }
+  }
+
+  return null;
 }
 
 export function startServer(config: Config, pipeline: Pipeline, queue: Queue) {
