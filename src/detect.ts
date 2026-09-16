@@ -23,16 +23,31 @@ export interface Detection {
   reason: string;
 }
 
+const ITEM_NAME_TAG = 'AcquisitionRecordGroupItemName';
+const ITEM_VALUE_TAG = 'AcquisitionRecordGroupItemValue';
+
 /**
- * Sony writes the picture profile into the acquisition metadata carried in the clip,
- * not into the container's color tags. S-Log3 has no assigned code in the H.264 or
- * HEVC specs, so the container almost always claims Rec.709 regardless of the
- * profile in use. Reading the Sony metadata is the only reliable signal.
+ * Reads the acquisition metadata Sony carries inside the clip.
+ *
+ * The clip holds an XML block of AcquisitionRecord entries, each one a name and a
+ * value, in a timed metadata track. exiftool does not turn those into named tags,
+ * so asking it for -CaptureGammaEquation returns nothing at all. What it reports
+ * instead is one run of name tags and one run of value tags, in document order.
+ * -ee reaches into the embedded track, -a keeps the repeats that exiftool would
+ * otherwise collapse to the first one, and -G4 prefixes every key with its copy
+ * number. That copy number is what pairs a name with its value: copy 11 of the
+ * name tag belongs to copy 11 of the value tag.
  */
-export async function readSonyGamma(config: Config, filePath: string): Promise<{ gamma: string | null; primaries: string | null }> {
+export async function readAcquisitionRecord(config: Config, filePath: string): Promise<Map<string, string>> {
   const { stdout } = await run(
     config.exiftoolPath,
-    ['-ee', '-api', 'largefilesupport=1', '-json', '-CaptureGammaEquation', '-CaptureColorPrimaries', filePath],
+    [
+      '-ee', '-a', '-G4', '-api', 'largefilesupport=1', '-json',
+      `-${ITEM_NAME_TAG}`, `-${ITEM_VALUE_TAG}`,
+      // Asked for as well in case a future exiftool does expose them by name.
+      '-CaptureGammaEquation', '-CaptureColorPrimaries',
+      filePath,
+    ],
     { timeoutMs: 5 * 60 * 1000 },
   );
 
@@ -41,20 +56,55 @@ export async function readSonyGamma(config: Config, filePath: string): Promise<{
     parsed = JSON.parse(stdout);
   } catch {
     log.warn('could not parse exiftool output', { filePath });
-    return { gamma: null, primaries: null };
+    return new Map();
   }
 
   const record = Array.isArray(parsed) ? (parsed[0] as Record<string, unknown> | undefined) : undefined;
-  const asString = (value: unknown): string | null => {
-    if (typeof value === 'string') return value;
-    // exiftool returns an array when the tag repeats across the clip's metadata blocks.
-    if (Array.isArray(value) && typeof value[0] === 'string') return value[0];
-    return null;
-  };
+  if (!record) return new Map();
 
+  const names = new Map<number, string>();
+  const values = new Map<number, string>();
+  const named = new Map<string, string>();
+
+  for (const [key, raw] of Object.entries(record)) {
+    // The first copy carries no number, so its key is just ":TagName".
+    const match = /^(?:Copy(\d+))?:(\w+)$/.exec(key);
+    if (!match) continue;
+
+    const copy = Number(match[1] ?? 0);
+    const tag = match[2] as string;
+    const text = typeof raw === 'string' ? raw : typeof raw === 'number' ? String(raw) : null;
+    if (text === null) continue;
+
+    if (tag === ITEM_NAME_TAG) names.set(copy, text);
+    else if (tag === ITEM_VALUE_TAG) values.set(copy, text);
+    else if (!named.has(tag)) named.set(tag, text);
+  }
+
+  // Anything exiftool named directly is a starting point, and the paired entries
+  // read out of the document take precedence over it.
+  const entries = new Map(named);
+  for (const copy of [...names.keys()].sort((a, b) => a - b)) {
+    const name = names.get(copy);
+    const value = values.get(copy);
+    if (name && value !== undefined) entries.set(name, value);
+  }
+
+  log.debug('read acquisition metadata', { entries: entries.size });
+  return entries;
+}
+
+/**
+ * The picture profile lives in that acquisition metadata and nowhere else. S-Log3
+ * has no assigned transfer characteristic in the H.264 or HEVC specs, so the
+ * container cannot describe it and does not try: a ZV-E1 clip leaves the color
+ * tags unset entirely. Reading the Sony metadata is the only reliable signal.
+ */
+export async function readSonyGamma(config: Config, filePath: string): Promise<{ gamma: string | null; primaries: string | null }> {
+  const record = await readAcquisitionRecord(config, filePath);
   return {
-    gamma: asString(record?.['CaptureGammaEquation']),
-    primaries: asString(record?.['CaptureColorPrimaries']),
+    gamma: record.get('CaptureGammaEquation') ?? null,
+    primaries: record.get('CaptureColorPrimaries') ?? null,
   };
 }
 

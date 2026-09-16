@@ -37,7 +37,7 @@ Upload (phone app, CLI, web, external library)
   +-- this service
         +-- GET /assets/:id                     screen out anything already handled
         +-- GET /assets/:id/original            download the clip
-        +-- exiftool -ee CaptureGammaEquation   is it actually S-Log?
+        +-- exiftool -ee acquisition metadata   is it actually S-Log?
         +-- ffmpeg lut3d                        apply the Rec.709 LUT
         +-- POST /assets                        upload NAME_rec709.mp4
         +-- POST /stacks                        stack it over the original, graded on top
@@ -48,17 +48,22 @@ Storage cost is roughly double for the clips it touches, because both versions s
 
 ## Detection
 
-Sony writes the picture profile into the acquisition metadata carried inside the clip, not into the container's color tags:
+Sony writes the picture profile into the acquisition metadata carried inside the clip, not into the container's color tags.
+exiftool does not turn that into named tags, so asking it for `-CaptureGammaEquation` returns nothing at all.
+What the clip carries is a list of name and value pairs, which exiftool reports as one run of name tags and one run of value tags:
 
 ```
-exiftool -ee -api largefilesupport=1 -CaptureGammaEquation -CaptureColorPrimaries clip.MP4
+exiftool -ee -a -G4 -json -api largefilesupport=1 \
+  -AcquisitionRecordGroupItemName -AcquisitionRecordGroupItemValue clip.MP4
 ```
 
-S-Log3 clips report `s-log3` or `s-log3-cine`.
-Standard clips report `rec709`.
+`-ee` reaches into the embedded metadata track, `-a` keeps the repeated tags, and `-G4` prefixes every key with its copy number.
+That copy number is what pairs a name with its value.
+A ZV-E1 clip shot in S-Log3 reports `CaptureGammaEquation` as `s-log3-cine` and `CaptureColorPrimaries` as `s-gamut3-cine`.
+`LOG_GAMMA_PATTERN` is matched against the gamma value, so its default of `^s-log` covers `s-log2`, `s-log3`, and `s-log3-cine`.
 
 Do not use `ffprobe`'s `color_transfer` for this.
-S-Log3 has no assigned transfer-characteristics code in the H.264 or HEVC specs, so the container claims Rec.709 no matter which profile was used.
+S-Log3 has no assigned transfer-characteristics code in the H.264 or HEVC specs, so the container cannot describe it and does not try: a ZV-E1 clip arrives with no transfer and no primaries set at all, tagged only as full range.
 The Sony metadata is the only reliable signal.
 
 If your uploads arrive with that metadata stripped, `PIXEL_FALLBACK_ENABLED=true` turns on a weaker heuristic based on luma statistics.
@@ -115,6 +120,11 @@ Graded uploads are skipped by three independent checks: the `_rec709` filename s
 The graded file is H.264 High, yuv420p, tagged Rec.709.
 With Immich's default `required` transcode policy that means Immich leaves it alone and serves it directly, so there is no second generation of encoding loss.
 If your policy is `optimal` or `bitrate`, Immich will also make its own smaller version, which is fine.
+
+Grading is CPU bound and there is no hardware path.
+At the defaults, a 9 second 3840x2160 clip took 15 seconds on a desktop CPU and came out at 20 Mbps, so roughly 1.7 seconds of work per second of footage.
+Capping `ENCODE_MAX_HEIGHT` at 1080 took the same clip to 6 seconds and 4.6 Mbps.
+A NAS will be slower than that, so start with one clip and measure before running a backfill over the library.
 
 `replaceAsset` (`PUT /assets/:id/original`) was removed from the Immich API, so swapping the original in place is not an option.
 Overwriting the file in `encoded-video/` does not work either: thumbnails are generated from the original, so the timeline would still show flat gray tiles, and any admin running "Transcode Videos: All" would undo it.

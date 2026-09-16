@@ -83,6 +83,8 @@ export function loadConfig() {
   if (config.encodeCrf < 0 || config.encodeCrf > 51) throw new Error('ENCODE_CRF must be between 0 and 51');
   if (config.encodeMaxHeight < 0) throw new Error('ENCODE_MAX_HEIGHT must be 0 or positive');
   if (!config.gradedSuffix) throw new Error('GRADED_SUFFIX must not be empty, it prevents reprocessing loops');
+  // There is no escaping that gets a single quote through ffmpeg's filtergraph parser.
+  if (config.lutPath.includes("'")) throw new Error('LUT_PATH must not contain a single quote');
 
   return config;
 }

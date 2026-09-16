@@ -8,11 +8,13 @@ import { log } from './log.js';
  *
  * The range handling is the part that has to be exactly right. S-Log3 defines its
  * reference points as absolute code values in the 0..1023 numbering: 95 is black,
- * 420 is 18% gray, 598 is 90% white. Sony tags the clip as limited range ("tv")
- * anyway, so a normal decode would stretch 64..940 out to 0..1 and shift every one
- * of those reference points before the LUT ever sees them, wrecking the shadows in
- * particular. Forcing in_range=full keeps the stored code values untouched, which is
- * what the LUT's input domain expects.
+ * 420 is 18% gray, 598 is 90% white, and the LUT's input domain is those code
+ * values mapped onto 0..1. A ZV-E1 clip is tagged full range and carries no
+ * transfer or primaries at all, so the default decode already matches, but a clip
+ * tagged limited range would have 64..940 stretched out to 0..1 and every
+ * reference point shifted before the LUT ever saw it, wrecking the shadows in
+ * particular. Forcing in_range=full keeps the stored code values untouched however
+ * the clip is tagged.
  *
  * On the way out the values are ordinary Rec.709, so they are written back as
  * limited range and tagged accordingly, which is what players expect.
@@ -38,12 +40,27 @@ export function buildFilterChain(config: Config, lutPath: string, probe: Probe):
   steps.push('scale=in_range=full:out_range=tv');
   steps.push('format=yuv420p');
 
+  // Label the result Rec.709 so players do not have to guess. This has to be done
+  // here rather than with the encoder's -color_primaries and -color_trc options:
+  // the frame properties carried down from the source win over those, and a ZV-E1
+  // clip arrives with both unset, so setting them on the encoder is dropped and
+  // the output ends up tagged "unknown".
+  steps.push('setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv');
+
   return steps.join(',');
 }
 
-/** ffmpeg filter arguments treat \ : ' , [ ] specially, so escape them. */
+/**
+ * The LUT path is a filter option value inside a filtergraph description, so the
+ * filtergraph parser reads it before lut3d does. Quoting it and escaping the
+ * separators is what keeps a Windows drive letter's colon, or a comma or bracket
+ * in a filename, from being taken for filtergraph syntax. Forward slashes work on
+ * both platforms. A single quote cannot be escaped in a way this parser accepts,
+ * so loadConfig rejects those paths rather than leaving ffmpeg to fail later.
+ */
 function escapeFilterPath(path: string): string {
-  return path.replace(/\\/g, '/').replace(/([:'\\,\[\]])/g, '\\$1');
+  const forwardSlashed = path.replace(/\\/g, '/');
+  return `'${forwardSlashed.replace(/([:,\[\]])/g, '\\$1')}'`;
 }
 
 export interface GradeOptions {
@@ -72,12 +89,6 @@ export async function grade(config: Config, options: GradeOptions): Promise<void
     '-preset', config.encodePreset,
     '-crf', String(config.encodeCrf),
     '-pix_fmt', 'yuv420p',
-
-    // Tag the result as Rec.709 so players do not have to guess.
-    '-colorspace', 'bt709',
-    '-color_primaries', 'bt709',
-    '-color_trc', 'bt709',
-    '-color_range', 'tv',
 
     // Carry over rotation, creation time, and the rest of the container tags.
     '-map_metadata', '0',
