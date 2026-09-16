@@ -125,17 +125,18 @@ export class ImmichClient {
     return this.json('POST', '/stacks', { assetIds });
   }
 
+  /**
+   * Reads one key out of an asset's metadata store.
+   *
+   * This fetches the whole store rather than GET /assets/:id/metadata/:key,
+   * because that endpoint answers 400, not 404, when the key is simply absent.
+   * An absent marker is the normal case for every asset this service has not
+   * seen yet, so it must not look like an error. The list endpoint returns an
+   * empty array and a 200 instead.
+   */
   async getMetadataKey(assetId: string, key: string): Promise<Record<string, unknown> | null> {
-    try {
-      const result = await this.json<{ key: string; value: Record<string, unknown> }>(
-        'GET',
-        `/assets/${assetId}/metadata/${encodeURIComponent(key)}`,
-      );
-      return result?.value ?? null;
-    } catch (error) {
-      if (error instanceof ImmichError && error.status === 404) return null;
-      throw error;
-    }
+    const items = await this.json<MetadataItem[]>('GET', `/assets/${assetId}/metadata`);
+    return items?.find((item) => item.key === key)?.value ?? null;
   }
 
   async setMetadata(assetId: string, items: MetadataItem[]): Promise<void> {
