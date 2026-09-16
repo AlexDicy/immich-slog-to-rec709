@@ -3,3 +3,10 @@ dist/
 .env
 .git/
 *.log
+
+# Local test material. Git ignores these too, and sending 800 MB of ffmpeg
+# binaries and sample clips to the daemon makes every build slow for nothing.
+testing-binaries/
+*.mp4
+.idea/
+.vscode/
