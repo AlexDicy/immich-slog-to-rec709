@@ -89,6 +89,13 @@ Check before relying on it: download a clip back out of Immich and run the exift
    Set `DRY_RUN=true`, upload an S-Log clip, and confirm the logs show the detection firing.
    Then set it back to `false`.
 
+## The published image
+
+`.github/workflows/publish.yaml` builds `linux/amd64` and pushes to `ghcr.io/<owner>/<repo>` on pushes to `main` and on `v*` tags.
+It runs the self-test inside the built image first, so a tag only gets published if that image's own FFmpeg applied the LUT correctly.
+
+As a TrueNAS custom app it needs the image reference, the environment from `.env.example`, a writable volume at `/work` sized for roughly three times your largest clip, and port 8710 reachable from Immich.
+
 ## Existing clips
 
 The webhook only sees new uploads.
