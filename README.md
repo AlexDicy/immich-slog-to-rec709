@@ -129,7 +129,11 @@ Turning `STACK_ASSETS` and `TAG_ASSETS` off leaves only the four `asset.` permis
 `.github/workflows/publish.yaml` builds `linux/amd64` and pushes to `ghcr.io/<owner>/<repo>` on pushes to `main` and on `v*` tags.
 It runs the self-test inside the built image first, so a tag only gets published if that image's own FFmpeg applied the LUT correctly.
 
-As a TrueNAS custom app it needs the image reference, the environment from `.env.example`, a writable volume at `/work` sized for roughly three times your largest clip, and port 8710 reachable from Immich.
+As a TrueNAS custom app it needs the image reference, the environment from `.env.example`, a volume at `/work` sized for roughly three times your largest clip, and port 8710 reachable from Immich.
+
+That volume has to be writable by **uid 1000**, because the image runs as the unprivileged `node` user.
+A dataset that TrueNAS creates for the app is owned by root, which is not enough: either give uid 1000 an ACL entry with full control, or `chown 1000:1000` the dataset.
+The service checks this at startup and refuses to run with a message naming the directory, rather than failing once per clip.
 
 ## Existing clips
 

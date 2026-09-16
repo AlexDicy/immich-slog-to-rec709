@@ -1,4 +1,5 @@
-import { mkdir } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import { loadConfig } from './config.js';
 import { ImmichClient } from './immich.js';
 import { Pipeline } from './pipeline.js';
@@ -21,6 +22,26 @@ Commands:
 
 Configuration is read from the environment. See .env.example.`;
 
+/**
+ * A work directory that exists but cannot be written to is the likeliest way this
+ * ends up misconfigured in a container, where the image runs as an unprivileged
+ * user and a mounted volume belongs to root. Creating the directory is not enough
+ * of a test, because the mount point itself already exists, so this writes into it.
+ */
+async function prepareWorkDir(directory: string): Promise<void> {
+  const probe = join(directory, `.write-probe-${process.pid}`);
+  try {
+    await mkdir(directory, { recursive: true });
+    await mkdir(probe);
+  } catch (error) {
+    const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+    const asUser = uid === null ? '' : `, and this process runs as uid ${uid}`;
+    throw new Error(`WORK_DIR ${directory} is not writable: ${errorMessage(error)}${asUser}`);
+  } finally {
+    await rm(probe, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 async function main(): Promise<number> {
   const [command, ...rest] = process.argv.slice(2);
 
@@ -38,7 +59,7 @@ async function main(): Promise<number> {
 
   const config = loadConfig();
   setLogLevel(config.logLevel);
-  await mkdir(config.workDir, { recursive: true });
+  await prepareWorkDir(config.workDir);
 
   if (command === 'selftest') return selftest(config);
 

@@ -3,7 +3,7 @@ import type { ImmichClient } from './immich.js';
 import type { Marker, Pipeline } from './pipeline.js';
 import { Queue } from './queue.js';
 import { currentSettings, describeSettingsDrift, settingsMatch } from './settings.js';
-import { log } from './log.js';
+import { log, errorMessage } from './log.js';
 
 export interface BackfillOptions {
   /** Stop after this many candidates. 0 means no limit. */
@@ -110,8 +110,16 @@ export async function backfill(
 
   for (const candidate of candidates) {
     queue.add(candidate.id, async () => {
-      const outcome = await pipeline.process(candidate.id, { reprocess: candidate.reprocess });
-      tally[outcome.action] += 1;
+      // process() reports its own failures, so this only catches something
+      // unforeseen. Either way it has to be counted: a tally that says nothing
+      // failed, and an exit code of 0, would be worse than the failure itself.
+      try {
+        const outcome = await pipeline.process(candidate.id, { reprocess: candidate.reprocess });
+        tally[outcome.action] += 1;
+      } catch (error) {
+        tally.failed += 1;
+        log.error('clip failed', { assetId: candidate.id, file: candidate.name, error: errorMessage(error) });
+      }
       log.info('backfill progress', { ...tally, remaining: queue.size - 1 });
     });
   }

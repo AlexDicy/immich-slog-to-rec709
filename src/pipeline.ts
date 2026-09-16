@@ -81,9 +81,12 @@ export class Pipeline {
     }
 
     const workDir = join(this.config.workDir, assetId);
-    await mkdir(workDir, { recursive: true });
 
     try {
+      // Inside the try, so that a work directory which cannot be created is
+      // reported as a failed clip rather than thrown past the tally.
+      await mkdir(workDir, { recursive: true });
+
       const parsed = parsePath(asset.originalFileName);
       const originalPath = join(workDir, `original${parsed.ext || '.mp4'}`);
 
