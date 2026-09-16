@@ -72,6 +72,8 @@ Check before relying on it: download a clip back out of Immich and run the exift
 ## Setup
 
 1. Create an Immich API key under Account Settings, on the account that owns the videos.
+   The graded copies are uploaded as that user.
+   Grant it the permissions listed below, not `all`.
 
 2. Configure and start the service:
 
@@ -88,6 +90,20 @@ Check before relying on it: download a clip back out of Immich and run the exift
 4. Test on one clip before turning it loose.
    Set `DRY_RUN=true`, upload an S-Log clip, and confirm the logs show the detection firing.
    Then set it back to `false`.
+
+### API key permissions
+
+| Permission | What needs it |
+| --- | --- |
+| `asset.read` | reading the asset, reading its marker, and the backfill search |
+| `asset.download` | fetching the original to grade |
+| `asset.upload` | uploading the graded version |
+| `asset.update` | writing the marker, and archiving the original when `ARCHIVE_ORIGINAL=true` |
+| `stack.create` | stacking the graded version over the original, when `STACK_ASSETS=true` |
+| `tag.create` and `tag.asset` | tagging both versions, when `TAG_ASSETS=true` |
+
+Turning `STACK_ASSETS` and `TAG_ASSETS` off leaves only the four `asset.` permissions.
+`GET /server/ping`, which the service calls at startup to fail fast on an unreachable server, is public and needs none of them.
 
 ## The published image
 
