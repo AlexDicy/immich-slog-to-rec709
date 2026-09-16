@@ -1,7 +1,7 @@
 import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Config } from './config.js';
-import { run, runBinary, commandExists } from './exec.js';
+import { run, runBinary, toolVersion } from './exec.js';
 import { buildFilterChain } from './grade.js';
 import { probe } from './detect.js';
 import { loadCube, sampleCube, type Cube } from './cube.js';
@@ -140,12 +140,17 @@ export async function selftest(config: Config): Promise<number> {
     log.info(`[${pass ? 'pass' : 'FAIL'}] ${name}`, { detail });
   };
 
+  // The version is reported, not just the presence of the tool. Debian's exiftool
+  // 12.57 reads only part of the Sony acquisition record on longer clips, which
+  // looks exactly like footage that carries no picture profile, so knowing which
+  // version is installed is the first thing worth checking when detection is quiet.
   for (const [name, command, args] of [
     ['ffmpeg', config.ffmpegPath, ['-version']],
     ['ffprobe', config.ffprobePath, ['-version']],
     ['exiftool', config.exiftoolPath, ['-ver']],
   ] as const) {
-    check(`${name} is available`, await commandExists(command, [...args]), command);
+    const version = await toolVersion(command, [...args]);
+    check(`${name} is available`, version !== null, version ?? command);
   }
 
   // The webhook payload shape is not part of the Immich API spec, so it is pinned

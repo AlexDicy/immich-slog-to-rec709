@@ -7,6 +7,7 @@ import { Queue } from './queue.js';
 import { startServer } from './server.js';
 import { backfill, parseBackfillArgs } from './backfill.js';
 import { selftest } from './selftest.js';
+import { toolVersion } from './exec.js';
 import { log, setLogLevel, errorMessage } from './log.js';
 
 const USAGE = `Usage: node dist/index.js <command>
@@ -62,6 +63,13 @@ async function main(): Promise<number> {
   await prepareWorkDir(config.workDir);
 
   if (command === 'selftest') return selftest(config);
+
+  // Logged on every run because a tool that is present but too old is the hardest
+  // failure to spot: detection simply goes quiet.
+  log.info('tool versions', {
+    ffmpeg: (await toolVersion(config.ffmpegPath, ['-version']))?.replace(/^ffmpeg version /, '').split(' ')[0] ?? 'unavailable',
+    exiftool: (await toolVersion(config.exiftoolPath, ['-ver'])) ?? 'unavailable',
+  });
 
   const immich = new ImmichClient(config);
   try {

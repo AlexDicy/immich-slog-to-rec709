@@ -90,3 +90,13 @@ export async function commandExists(command: string, versionArgs: string[] = ['-
     return false;
   }
 }
+
+/** First line of the tool's version output, or null when it cannot be run. */
+export async function toolVersion(command: string, versionArgs: string[] = ['-version']): Promise<string | null> {
+  try {
+    const { stdout } = await run(command, versionArgs, { timeoutMs: 30_000 });
+    return stdout.split('\n')[0]?.trim() ?? '';
+  } catch {
+    return null;
+  }
+}
