@@ -89,11 +89,20 @@ export async function grade(config: Config, options: GradeOptions): Promise<void
     '-preset', config.encodePreset,
     '-crf', String(config.encodeCrf),
     '-pix_fmt', 'yuv420p',
+  ];
 
-    // Carry over rotation, creation time, and the rest of the container tags.
+  if (config.encodeMaxBitrate > 0) {
+    // Capped CRF. The encode stays quality driven and only gives ground where it
+    // would otherwise exceed the cap. Two seconds of buffer is the usual pairing,
+    // which still lets a hard cut peak above the average.
+    args.push('-maxrate', String(config.encodeMaxBitrate), '-bufsize', String(config.encodeMaxBitrate * 2));
+  }
+
+  // Carry over rotation, creation time, and the rest of the container tags.
+  args.push(
     '-map_metadata', '0',
     '-movflags', '+faststart+use_metadata_tags',
-  ];
+  );
 
   if (options.probe.hasAudio) {
     args.push('-c:a', 'aac', '-b:a', config.audioBitrate);

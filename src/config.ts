@@ -22,6 +22,17 @@ const booleanEnv = (name: string, fallback: boolean): boolean => {
   throw new Error(`${name} must be a boolean, got "${raw}"`);
 };
 
+/** Accepts a plain bit count or an ffmpeg style suffix: 20000000, 20000k, 20M. */
+const bitrateEnv = (name: string, fallback: number): number => {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const match = /^(\d+(?:\.\d+)?)\s*([kKmM]?)$/.exec(raw);
+  if (!match) throw new Error(`${name} must be a bitrate such as 20M, 20000k, or 20000000, got "${raw}"`);
+  const suffix = (match[2] ?? '').toLowerCase();
+  const scale = suffix === 'm' ? 1e6 : suffix === 'k' ? 1e3 : 1;
+  return Math.round(Number(match[1]) * scale);
+};
+
 const listEnv = (name: string, fallback: string[]): string[] => {
   const raw = process.env[name]?.trim();
   if (raw === undefined) return fallback;
@@ -62,6 +73,8 @@ export function loadConfig() {
     encodePreset: optionalEnv('ENCODE_PRESET', 'slow'),
     /** 0 keeps the source resolution. */
     encodeMaxHeight: numberEnv('ENCODE_MAX_HEIGHT', 0),
+    /** Bits per second the video stream may not exceed. 0 leaves CRF uncapped. */
+    encodeMaxBitrate: bitrateEnv('ENCODE_MAX_BITRATE', 0),
     audioBitrate: optionalEnv('AUDIO_BITRATE', '192k'),
 
     gradedSuffix: optionalEnv('GRADED_SUFFIX', '_rec709'),
