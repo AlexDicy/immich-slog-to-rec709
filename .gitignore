@@ -7,6 +7,5 @@ dist/
 .vscode/
 
 testing-binaries/
-
-slog_example.mp4
 luts/generated-*.cube
+slog_example.mp4
