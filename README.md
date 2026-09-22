@@ -183,6 +183,8 @@ docker compose exec slog-grader node dist/index.js backfill --changed
 
 `--changed` regrades the clips whose recorded settings no longer match the current configuration, and leaves the rest alone.
 The LUT is compared by content rather than by path, so editing a `.cube` in place counts as a change while moving or renaming the file does not.
+The content is the table of values the LUT holds, not the bytes of the file, so line endings, comments, and number formatting do not count either.
+That matters for a LUT exported on Windows, whose CRLF line endings git converts on commit.
 A clip graded before those settings were recorded also counts as changed, because a match cannot be shown.
 A record from before the exposure offset existed counts as an offset of 0, which is what it was graded with.
 

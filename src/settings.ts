@@ -1,15 +1,18 @@
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import type { Config } from './config.js';
+import { loadCube } from './cube.js';
 
 /**
  * The encode parameters that decide what the graded file looks like, recorded on
  * the asset so a later run can tell whether the settings have moved on.
  *
- * The LUT is compared by a hash of its contents rather than by its path, because
- * the path differs between a container and a local run while the result is
- * identical, and because a LUT can be edited in place without its name changing.
+ * The LUT is compared by a hash of the values it holds rather than by its path,
+ * because the path differs between a container and a local run while the result
+ * is identical, and because a LUT can be edited in place without its name
+ * changing. Hashing the parsed values rather than the file's bytes means line
+ * endings, comments, and number formatting do not count as a change: a .cube
+ * exported on Windows has CRLF line endings, which git converts on commit.
  * Its file name is recorded only so a person reading the marker can tell which LUT
  * it was, so renaming the file does not make a clip look stale. Only things that
  * change the output belong here: adding a field that does not, such as the work
@@ -49,7 +52,12 @@ const hashCache = new Map<string, string>();
 async function lutHash(path: string): Promise<string> {
   const cached = hashCache.get(path);
   if (cached) return cached;
-  const hash = createHash('sha256').update(await readFile(path)).digest('hex').slice(0, 12);
+  const cube = await loadCube(path);
+  const hash = createHash('sha256')
+    .update(JSON.stringify({ size: cube.size, domainMin: cube.domainMin, domainMax: cube.domainMax }))
+    .update(new Uint8Array(cube.table.buffer, cube.table.byteOffset, cube.table.byteLength))
+    .digest('hex')
+    .slice(0, 12);
   hashCache.set(path, hash);
   return hash;
 }
