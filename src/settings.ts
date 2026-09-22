@@ -7,11 +7,13 @@ import type { Config } from './config.js';
  * The encode parameters that decide what the graded file looks like, recorded on
  * the asset so a later run can tell whether the settings have moved on.
  *
- * The LUT is identified by name and by a hash of its contents rather than by its
- * path, because the path differs between a container and a local run while the
- * result is identical, and because a LUT can be edited in place without its name
- * changing. Only things that change the output belong here: adding a field that
- * does not, such as the work directory, would make every clip look stale.
+ * The LUT is compared by a hash of its contents rather than by its path, because
+ * the path differs between a container and a local run while the result is
+ * identical, and because a LUT can be edited in place without its name changing.
+ * Its file name is recorded only so a person reading the marker can tell which LUT
+ * it was, so renaming the file does not make a clip look stale. Only things that
+ * change the output belong here: adding a field that does not, such as the work
+ * directory, would make every clip look stale.
  */
 export interface EncodeSettings {
   crf: number;
@@ -30,6 +32,13 @@ export interface EncodeSettings {
  * stale, when they were in fact graded with what is still the default.
  */
 const UNRECORDED_DEFAULTS: Partial<EncodeSettings> = { exposure: 0 };
+
+/** Recorded for people reading the marker, not compared. */
+const DESCRIPTIVE_KEYS: ReadonlySet<keyof EncodeSettings> = new Set(['lut']);
+
+function comparedKeys(current: EncodeSettings): (keyof EncodeSettings)[] {
+  return (Object.keys(current) as (keyof EncodeSettings)[]).filter((key) => !DESCRIPTIVE_KEYS.has(key));
+}
 
 function recordedValue(recorded: Record<string, unknown>, key: keyof EncodeSettings): unknown {
   return key in recorded ? recorded[key] : UNRECORDED_DEFAULTS[key];
@@ -67,13 +76,13 @@ export async function currentSettings(config: Config): Promise<EncodeSettings> {
 export function settingsMatch(recorded: unknown, current: EncodeSettings): boolean {
   if (!recorded || typeof recorded !== 'object') return false;
   const value = recorded as Record<string, unknown>;
-  return (Object.keys(current) as (keyof EncodeSettings)[]).every((key) => recordedValue(value, key) === current[key]);
+  return comparedKeys(current).every((key) => recordedValue(value, key) === current[key]);
 }
 
 export function describeSettingsDrift(recorded: unknown, current: EncodeSettings): string {
   if (!recorded || typeof recorded !== 'object') return 'no settings were recorded';
   const value = recorded as Record<string, unknown>;
-  const drifted = (Object.keys(current) as (keyof EncodeSettings)[])
+  const drifted = comparedKeys(current)
     .filter((key) => recordedValue(value, key) !== current[key])
     .map((key) => `${key} ${JSON.stringify(recordedValue(value, key))} -> ${JSON.stringify(current[key])}`);
   return drifted.length > 0 ? drifted.join(', ') : 'settings match';
