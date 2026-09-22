@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
 import type { Config } from './config.js';
+import { isAssetId } from './immich.js';
 import type { Pipeline } from './pipeline.js';
 import type { Queue } from './queue.js';
 import { log, errorMessage } from './log.js';
@@ -62,7 +63,7 @@ export function extractAssetId(body: string): string | null {
       }
       current = (current as Record<string, unknown>)[key];
     }
-    if (typeof current === 'string' && /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(current)) {
+    if (typeof current === 'string' && isAssetId(current)) {
       return current;
     }
   }

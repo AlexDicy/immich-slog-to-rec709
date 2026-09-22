@@ -2,6 +2,7 @@ import type { Config } from './config.js';
 import { run } from './exec.js';
 import type { Probe } from './detect.js';
 import { log } from './log.js';
+import { shiftExposureExpression } from './slog3.js';
 
 /**
  * Builds the video filter chain that applies the LUT.
@@ -29,6 +30,13 @@ export function buildFilterChain(config: Config, lutPath: string, probe: Probe):
   // Work at 16 bits per channel so the LUT is not applied to already-quantized
   // 8-bit values. gbrp16le keeps the planar layout lut3d prefers.
   steps.push('format=gbrp16le');
+
+  // Applied in scene linear light and before the LUT, so it behaves like having
+  // exposed the clip brighter or darker rather than like a brightness slider.
+  if (config.exposureOffset !== 0) {
+    const expression = shiftExposureExpression(config.exposureOffset);
+    steps.push(`lutrgb=r='${expression}':g='${expression}':b='${expression}'`);
+  }
 
   steps.push(`lut3d=file=${escapeFilterPath(lutPath)}:interp=tetrahedral`);
 

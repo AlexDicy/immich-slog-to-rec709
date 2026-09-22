@@ -6,6 +6,9 @@ import { Readable } from 'node:stream';
 import type { Config } from './config.js';
 import { log } from './log.js';
 
+export const isAssetId = (value: string): boolean =>
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(value);
+
 export interface ExifInfo {
   make?: string | null;
   model?: string | null;

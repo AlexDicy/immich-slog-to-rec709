@@ -21,6 +21,18 @@ export interface EncodeSettings {
   audioBitrate: string;
   lut: string;
   lutHash: string;
+  exposure: number;
+}
+
+/**
+ * What a field added after markers were already being written means when a marker
+ * lacks it. Without this, adding a setting would make every existing clip look
+ * stale, when they were in fact graded with what is still the default.
+ */
+const UNRECORDED_DEFAULTS: Partial<EncodeSettings> = { exposure: 0 };
+
+function recordedValue(recorded: Record<string, unknown>, key: keyof EncodeSettings): unknown {
+  return key in recorded ? recorded[key] : UNRECORDED_DEFAULTS[key];
 }
 
 const hashCache = new Map<string, string>();
@@ -42,6 +54,7 @@ export async function currentSettings(config: Config): Promise<EncodeSettings> {
     audioBitrate: config.audioBitrate,
     lut: basename(config.lutPath),
     lutHash: await lutHash(config.lutPath),
+    exposure: config.exposureOffset,
   };
 }
 
@@ -54,14 +67,14 @@ export async function currentSettings(config: Config): Promise<EncodeSettings> {
 export function settingsMatch(recorded: unknown, current: EncodeSettings): boolean {
   if (!recorded || typeof recorded !== 'object') return false;
   const value = recorded as Record<string, unknown>;
-  return (Object.keys(current) as (keyof EncodeSettings)[]).every((key) => value[key] === current[key]);
+  return (Object.keys(current) as (keyof EncodeSettings)[]).every((key) => recordedValue(value, key) === current[key]);
 }
 
 export function describeSettingsDrift(recorded: unknown, current: EncodeSettings): string {
   if (!recorded || typeof recorded !== 'object') return 'no settings were recorded';
   const value = recorded as Record<string, unknown>;
   const drifted = (Object.keys(current) as (keyof EncodeSettings)[])
-    .filter((key) => value[key] !== current[key])
-    .map((key) => `${key} ${JSON.stringify(value[key])} -> ${JSON.stringify(current[key])}`);
+    .filter((key) => recordedValue(value, key) !== current[key])
+    .map((key) => `${key} ${JSON.stringify(recordedValue(value, key))} -> ${JSON.stringify(current[key])}`);
   return drifted.length > 0 ? drifted.join(', ') : 'settings match';
 }

@@ -19,6 +19,8 @@ Commands:
            [--force]        --force regrades everything, ignoring the markers
            [--changed]      --changed regrades what was graded with settings
                             that no longer match, replacing the old output
+           [--asset ID]     --asset runs only the given asset, and regrades it
+                            if it was already graded. Repeat it for more assets
   selftest                  Check the tools and verify the LUT renders known values correctly
 
 Configuration is read from the environment. See .env.example.`;

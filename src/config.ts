@@ -57,6 +57,8 @@ export function loadConfig() {
     webhookHeader: optionalEnv('WEBHOOK_HEADER', 'x-grader-token').toLowerCase(),
 
     lutPath: optionalEnv('LUT_PATH', '/app/luts/lc_709_type_a.cube'),
+    /** Stops of exposure added to the S-Log3 footage before the LUT. Negative darkens. */
+    exposureOffset: numberEnv('EXPOSURE_OFFSET', 0),
     workDir: optionalEnv('WORK_DIR', '/tmp/slog-grader'),
     ffmpegPath: optionalEnv('FFMPEG_PATH', 'ffmpeg'),
     ffprobePath: optionalEnv('FFPROBE_PATH', 'ffprobe'),
@@ -94,6 +96,7 @@ export function loadConfig() {
 
   if (config.concurrency < 1) throw new Error('CONCURRENCY must be at least 1');
   if (config.encodeCrf < 0 || config.encodeCrf > 51) throw new Error('ENCODE_CRF must be between 0 and 51');
+  if (Math.abs(config.exposureOffset) > 4) throw new Error('EXPOSURE_OFFSET must be between -4 and 4 stops');
   if (config.encodeMaxHeight < 0) throw new Error('ENCODE_MAX_HEIGHT must be 0 or positive');
   if (!config.gradedSuffix) throw new Error('GRADED_SUFFIX must not be empty, it prevents reprocessing loops');
   // There is no escaping that gets a single quote through ffmpeg's filtergraph parser.

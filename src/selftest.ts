@@ -6,6 +6,7 @@ import { buildFilterChain } from './grade.js';
 import { probe } from './detect.js';
 import { loadCube, sampleCube, type Cube } from './cube.js';
 import { extractAssetId } from './server.js';
+import { shiftExposure } from './slog3.js';
 import { log, errorMessage } from './log.js';
 
 /**
@@ -60,9 +61,12 @@ function buildFrame(lumaCode: number): Buffer {
   return Buffer.concat([luma, chroma, chroma]);
 }
 
-/** What the loaded LUT says a neutral S-Log3 code value becomes, as 8-bit Rec.709. */
-function predict(cube: Cube, slogCode: number): [number, number, number] {
-  const input = slogCode / 1023;
+/**
+ * What the loaded LUT says a neutral S-Log3 code value becomes, as 8-bit Rec.709,
+ * after the exposure offset has moved it.
+ */
+function predict(cube: Cube, slogCode: number, exposure = 0): [number, number, number] {
+  const input = Math.min(1023, Math.max(0, shiftExposure(slogCode, exposure))) / 1023;
   const output = sampleCube(cube, [input, input, input]);
   return output.map((value) => Math.round(Math.min(1, Math.max(0, value)) * 255)) as [number, number, number];
 }
@@ -205,17 +209,23 @@ export async function selftest(config: Config): Promise<number> {
   await rm(workDir, { recursive: true, force: true });
   await mkdir(workDir, { recursive: true });
 
+  // The offset is rendered even when it is not configured, so the expression is
+  // proven to work in this FFmpeg before anyone turns it on.
+  const exposures = [...new Set([0, 1, config.exposureOffset])];
+  const cases = exposures.flatMap((exposure) => PATCHES.map((patch) => ({ exposure, patch })));
+
   try {
-    for (const patch of PATCHES) {
-      const rendered = await renderPatch(config, workDir, patch);
-      const expected = predict(cube, patch.slogCode);
+    for (const { exposure, patch } of cases) {
+      const rendered = await renderPatch({ ...config, exposureOffset: exposure }, workDir, patch);
+      const expected = predict(cube, patch.slogCode, exposure);
       const worstDeviation = Math.max(
         ...([0, 1, 2] as const).map((channel) =>
           Math.abs((rendered[channel] as number) - (expected[channel] as number)),
         ),
       );
+      const offsetLabel = exposure === 0 ? '' : ` at ${exposure > 0 ? '+' : ''}${exposure} stops`;
       check(
-        `${patch.name} matches what the LUT predicts`,
+        `${patch.name}${offsetLabel} matches what the LUT predicts`,
         worstDeviation <= TOLERANCE_8BIT,
         `rendered rgb(${rendered.join(', ')}), LUT predicts rgb(${expected.join(', ')}), worst off by ${worstDeviation}`,
       );

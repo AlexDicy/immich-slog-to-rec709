@@ -91,6 +91,24 @@ Immich infers the time zone from the coordinates, and with none present it falls
 Sony's per-frame acquisition record, which carries the picture profile and the lens telemetry, is not carried over.
 Nothing Immich displays comes from it.
 
+## Brightness
+
+The shipped LUTs are Sony's LC-709 looks.
+They place 18% gray at about 40% and keep several stops of highlight detail that an in-camera photo would clip, so a clip exposed by the meter comes out darker and flatter than a photo of the same scene.
+
+| Scene exposure | S-Log3 code | lc_709.cube, 8-bit |
+|---|---|---|
+| -1 stop | 347 | 67 |
+| 18% gray | 420 | 102 |
+| +1 stop | 496 | 137 |
+| +2 stops | 573 | 173 |
+| +3 stops | 651 | 206 |
+
+`EXPOSURE_OFFSET` adds stops of exposure before the LUT.
+It works in scene linear light, so `1` renders the clip as though it had been shot one stop brighter: black stays black, gray moves from 102 to 137, and highlights move toward clipping just as they would have in camera.
+Footage exposed by the meter usually looks right between `1` and `1.5`.
+Footage already exposed brighter than the meter, as S-Log3 is often shot, needs less or none.
+
 ## Setup
 
 1. Create an Immich API key under Account Settings, on the account that owns the videos.
@@ -156,7 +174,7 @@ Start with `--limit 1` and look at the result in Immich before running the whole
 ## Reprocessing
 
 Every asset it touches gets a `slog-grader` metadata key recording the decision, which is also how it avoids doing the same work twice.
-On a graded asset that record includes the settings which produced the output: CRF, preset, maximum height, maximum bitrate, audio bitrate, and the LUT's name and a hash of its contents.
+On a graded asset that record includes the settings which produced the output: CRF, preset, maximum height, maximum bitrate, audio bitrate, exposure offset, and the LUT's name and a hash of its contents.
 
 ```
 docker compose exec slog-grader node dist/index.js backfill --changed --list
@@ -166,18 +184,21 @@ docker compose exec slog-grader node dist/index.js backfill --changed
 `--changed` regrades the clips whose recorded settings no longer match the current configuration, and leaves the rest alone.
 The LUT is compared by content rather than by path, so editing a `.cube` in place counts as a change while moving or renaming the file does not.
 A clip graded before those settings were recorded also counts as changed, because a match cannot be shown.
+A record from before the exposure offset existed counts as an offset of 0, which is what it was graded with.
 
 `--force` ignores the records entirely, which also means it revisits clips that were previously skipped as not being S-Log, running detection over them again.
 
 Either way the superseded graded version is moved to the trash, and only after its replacement has been uploaded, so a failed encode never leaves a clip with nothing stacked over it and a regrade you dislike can be recovered.
 This is the one thing that needs `asset.delete` on the API key.
 
-To make a single clip eligible again without a full `--force`, delete its record:
+To regrade particular clips, name them:
 
 ```
-curl -X DELETE -H "x-api-key: $IMMICH_API_KEY" \
-  "$IMMICH_URL/api/assets/<asset-id>/metadata/slog-grader"
+docker compose exec slog-grader node dist/index.js backfill --asset <asset-id> --asset <asset-id>
 ```
+
+The id can be either the original or its graded copy, which is the one the Immich web UI opens from the timeline, so copying it from the address bar works.
+A graded copy is followed back to the original it was made from.
 
 Graded uploads are skipped by three independent checks: the `_rec709` filename suffix, the `graded-output` marker written before anything else happens, and the fact that FFmpeg does not copy Sony's acquisition metadata into the output, so the gamma detection finds nothing to act on.
 

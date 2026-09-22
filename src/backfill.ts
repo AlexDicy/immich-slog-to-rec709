@@ -1,5 +1,5 @@
 import type { Config } from './config.js';
-import type { ImmichClient } from './immich.js';
+import { isAssetId, type ImmichClient } from './immich.js';
 import type { Marker, Pipeline } from './pipeline.js';
 import { Queue } from './queue.js';
 import { currentSettings, describeSettingsDrift, settingsMatch } from './settings.js';
@@ -14,10 +14,12 @@ export interface BackfillOptions {
   force: boolean;
   /** Regrade only what was graded with encode settings that no longer apply. */
   changed: boolean;
+  /** Run only these assets instead of searching the library, regrading any already graded. */
+  assetIds: string[];
 }
 
 export function parseBackfillArgs(argv: string[]): BackfillOptions {
-  const options: BackfillOptions = { limit: 0, listOnly: false, force: false, changed: false };
+  const options: BackfillOptions = { limit: 0, listOnly: false, force: false, changed: false, assetIds: [] };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--list') {
@@ -26,6 +28,10 @@ export function parseBackfillArgs(argv: string[]): BackfillOptions {
       options.force = true;
     } else if (arg === '--changed') {
       options.changed = true;
+    } else if (arg === '--asset') {
+      const value = argv[++i] ?? '';
+      if (!isAssetId(value)) throw new Error(`--asset needs an asset id, got "${value}"`);
+      options.assetIds.push(value);
     } else if (arg === '--limit') {
       const value = Number(argv[++i]);
       if (!Number.isInteger(value) || value < 0) throw new Error('--limit needs a non-negative integer');
@@ -35,7 +41,17 @@ export function parseBackfillArgs(argv: string[]): BackfillOptions {
     }
   }
   if (options.force && options.changed) throw new Error('use either --force or --changed, not both');
+  if (options.assetIds.length > 0 && (options.force || options.changed || options.limit > 0)) {
+    throw new Error('--asset already regrades exactly the assets given, so it takes no --force, --changed, or --limit');
+  }
   return options;
+}
+
+interface Candidate {
+  id: string;
+  name: string;
+  model: string;
+  reprocess: boolean;
 }
 
 /**
@@ -49,44 +65,10 @@ export async function backfill(
   pipeline: Pipeline,
   options: BackfillOptions,
 ): Promise<number> {
-  const models = config.cameraModels.length > 0 ? config.cameraModels : [undefined];
-  const seen = new Set<string>();
-  const candidates: { id: string; name: string; model: string; reprocess: boolean }[] = [];
-  const settings = await currentSettings(config);
-
-  for (const model of models) {
-    const criteria: Record<string, unknown> = { type: 'VIDEO', withStacked: true };
-    if (model) criteria['model'] = model;
-
-    for await (const asset of immich.searchAssets(criteria)) {
-      if (seen.has(asset.id)) continue;
-      seen.add(asset.id);
-
-      const marker = (await immich.getMetadataKey(asset.id, config.metadataKey)) as Marker | null;
-      let reprocess = false;
-      if (marker) {
-        const fields = { assetId: asset.id, file: asset.originalFileName };
-        if (options.force) {
-          reprocess = true;
-        } else if (options.changed && marker.status === 'graded' && !settingsMatch(marker.settings, settings)) {
-          reprocess = true;
-          log.info('encode settings no longer match', { ...fields, drift: describeSettingsDrift(marker.settings, settings) });
-        } else {
-          log.debug('already handled', fields);
-          continue;
-        }
-      }
-
-      candidates.push({
-        id: asset.id,
-        name: asset.originalFileName,
-        model: asset.exifInfo?.model ?? 'unknown',
-        reprocess,
-      });
-      if (options.limit > 0 && candidates.length >= options.limit) break;
-    }
-    if (options.limit > 0 && candidates.length >= options.limit) break;
-  }
+  const candidates =
+    options.assetIds.length > 0
+      ? await namedCandidates(config, immich, options.assetIds)
+      : await searchCandidates(config, immich, options);
 
   log.info('backfill candidates found', {
     count: candidates.length,
@@ -127,4 +109,75 @@ export async function backfill(
   await queue.onIdle();
   log.info('backfill complete', tally);
   return tally.failed > 0 ? 1 : 0;
+}
+
+async function searchCandidates(config: Config, immich: ImmichClient, options: BackfillOptions): Promise<Candidate[]> {
+  const models = config.cameraModels.length > 0 ? config.cameraModels : [undefined];
+  const seen = new Set<string>();
+  const candidates: Candidate[] = [];
+  const settings = await currentSettings(config);
+
+  for (const model of models) {
+    const criteria: Record<string, unknown> = { type: 'VIDEO', withStacked: true };
+    if (model) criteria['model'] = model;
+
+    for await (const asset of immich.searchAssets(criteria)) {
+      if (seen.has(asset.id)) continue;
+      seen.add(asset.id);
+
+      const marker = (await immich.getMetadataKey(asset.id, config.metadataKey)) as Marker | null;
+      let reprocess = false;
+      if (marker) {
+        const fields = { assetId: asset.id, file: asset.originalFileName };
+        if (options.force) {
+          reprocess = true;
+        } else if (options.changed && marker.status === 'graded' && !settingsMatch(marker.settings, settings)) {
+          reprocess = true;
+          log.info('encode settings no longer match', { ...fields, drift: describeSettingsDrift(marker.settings, settings) });
+        } else {
+          log.debug('already handled', fields);
+          continue;
+        }
+      }
+
+      candidates.push({
+        id: asset.id,
+        name: asset.originalFileName,
+        model: asset.exifInfo?.model ?? 'unknown',
+        reprocess,
+      });
+      if (options.limit > 0 && candidates.length >= options.limit) break;
+    }
+    if (options.limit > 0 && candidates.length >= options.limit) break;
+  }
+
+  return candidates;
+}
+
+/**
+ * The ids are taken as given, so a clip that was already graded is regraded. An id
+ * copied from the Immich web UI usually belongs to the graded copy, because that
+ * is what sits on top of the stack, so a graded copy is followed back to its source.
+ */
+async function namedCandidates(config: Config, immich: ImmichClient, assetIds: string[]): Promise<Candidate[]> {
+  const candidates: Candidate[] = [];
+  for (const requestedId of new Set(assetIds)) {
+    let marker = (await immich.getMetadataKey(requestedId, config.metadataKey)) as Marker | null;
+    let id = requestedId;
+    if (marker?.status === 'graded-output' && marker.sourceAssetId) {
+      id = marker.sourceAssetId;
+      log.info('asset is a graded copy, using its source instead', { requestedId, sourceAssetId: id });
+      marker = (await immich.getMetadataKey(id, config.metadataKey)) as Marker | null;
+    }
+    if (candidates.some((candidate) => candidate.id === id)) continue;
+
+    const asset = await immich.getAsset(id);
+    candidates.push({
+      id,
+      name: asset.originalFileName,
+      model: asset.exifInfo?.model ?? 'unknown',
+      reprocess: Boolean(marker),
+    });
+  }
+  return candidates;
 }
