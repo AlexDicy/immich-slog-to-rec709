@@ -1,5 +1,6 @@
 import type { Config } from './config.js';
-import { isAssetId, type ImmichClient } from './immich.js';
+import { replaceInAlbums } from './albums.js';
+import { isAssetId, type Asset, type ImmichClient } from './immich.js';
 import type { Marker, Pipeline } from './pipeline.js';
 import { Queue } from './queue.js';
 import { currentSettings, describeSettingsDrift, settingsMatch } from './settings.js';
@@ -16,10 +17,12 @@ export interface BackfillOptions {
   changed: boolean;
   /** Run only these assets instead of searching the library, regrading any already graded. */
   assetIds: string[];
+  /** Swap originals that are in albums for their graded copies, without grading anything. */
+  syncAlbums: boolean;
 }
 
 export function parseBackfillArgs(argv: string[]): BackfillOptions {
-  const options: BackfillOptions = { limit: 0, listOnly: false, force: false, changed: false, assetIds: [] };
+  const options: BackfillOptions = { limit: 0, listOnly: false, force: false, changed: false, assetIds: [], syncAlbums: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--list') {
@@ -28,6 +31,8 @@ export function parseBackfillArgs(argv: string[]): BackfillOptions {
       options.force = true;
     } else if (arg === '--changed') {
       options.changed = true;
+    } else if (arg === '--sync-albums') {
+      options.syncAlbums = true;
     } else if (arg === '--asset') {
       const value = argv[++i] ?? '';
       if (!isAssetId(value)) throw new Error(`--asset needs an asset id, got "${value}"`);
@@ -43,6 +48,9 @@ export function parseBackfillArgs(argv: string[]): BackfillOptions {
   if (options.force && options.changed) throw new Error('use either --force or --changed, not both');
   if (options.assetIds.length > 0 && (options.force || options.changed || options.limit > 0)) {
     throw new Error('--asset already regrades exactly the assets given, so it takes no --force, --changed, or --limit');
+  }
+  if (options.syncAlbums && (options.force || options.changed || options.limit > 0 || options.assetIds.length > 0)) {
+    throw new Error('--sync-albums takes no options other than --list');
   }
   return options;
 }
@@ -65,6 +73,8 @@ export async function backfill(
   pipeline: Pipeline,
   options: BackfillOptions,
 ): Promise<number> {
+  if (options.syncAlbums) return syncAlbums(config, immich, options.listOnly);
+
   const candidates =
     options.assetIds.length > 0
       ? await namedCandidates(config, immich, options.assetIds)
@@ -111,47 +121,92 @@ export async function backfill(
   return tally.failed > 0 ? 1 : 0;
 }
 
-async function searchCandidates(config: Config, immich: ImmichClient, options: BackfillOptions): Promise<Candidate[]> {
+/** Every video from the configured camera models, each once. */
+async function* libraryVideos(config: Config, immich: ImmichClient): AsyncGenerator<Asset> {
   const models = config.cameraModels.length > 0 ? config.cameraModels : [undefined];
   const seen = new Set<string>();
-  const candidates: Candidate[] = [];
-  const settings = await currentSettings(config);
-
   for (const model of models) {
     const criteria: Record<string, unknown> = { type: 'VIDEO', withStacked: true };
     if (model) criteria['model'] = model;
-
     for await (const asset of immich.searchAssets(criteria)) {
       if (seen.has(asset.id)) continue;
       seen.add(asset.id);
-
-      const marker = (await immich.getMetadataKey(asset.id, config.metadataKey)) as Marker | null;
-      let reprocess = false;
-      if (marker) {
-        const fields = { assetId: asset.id, file: asset.originalFileName };
-        if (options.force) {
-          reprocess = true;
-        } else if (options.changed && marker.status === 'graded' && !settingsMatch(marker.settings, settings)) {
-          reprocess = true;
-          log.info('encode settings no longer match', { ...fields, drift: describeSettingsDrift(marker.settings, settings) });
-        } else {
-          log.debug('already handled', fields);
-          continue;
-        }
-      }
-
-      candidates.push({
-        id: asset.id,
-        name: asset.originalFileName,
-        model: asset.exifInfo?.model ?? 'unknown',
-        reprocess,
-      });
-      if (options.limit > 0 && candidates.length >= options.limit) break;
+      yield asset;
     }
+  }
+}
+
+async function searchCandidates(config: Config, immich: ImmichClient, options: BackfillOptions): Promise<Candidate[]> {
+  const candidates: Candidate[] = [];
+  const settings = await currentSettings(config);
+
+  for await (const asset of libraryVideos(config, immich)) {
+    const marker = (await immich.getMetadataKey(asset.id, config.metadataKey)) as Marker | null;
+    let reprocess = false;
+    if (marker) {
+      const fields = { assetId: asset.id, file: asset.originalFileName };
+      if (options.force) {
+        reprocess = true;
+      } else if (options.changed && marker.status === 'graded' && !settingsMatch(marker.settings, settings)) {
+        reprocess = true;
+        log.info('encode settings no longer match', { ...fields, drift: describeSettingsDrift(marker.settings, settings) });
+      } else {
+        log.debug('already handled', fields);
+        continue;
+      }
+    }
+
+    candidates.push({
+      id: asset.id,
+      name: asset.originalFileName,
+      model: asset.exifInfo?.model ?? 'unknown',
+      reprocess,
+    });
     if (options.limit > 0 && candidates.length >= options.limit) break;
   }
 
   return candidates;
+}
+
+/**
+ * Catches up on originals added to an album after they were graded, which no
+ * webhook reports. Nothing is downloaded, so this is cheap enough to run often.
+ */
+async function syncAlbums(config: Config, immich: ImmichClient, listOnly: boolean): Promise<number> {
+  const tally = { clips: 0, albums: 0, failed: 0 };
+
+  for await (const asset of libraryVideos(config, immich)) {
+    const fields = { assetId: asset.id, file: asset.originalFileName };
+    try {
+      const marker = (await immich.getMetadataKey(asset.id, config.metadataKey)) as Marker | null;
+      if (marker?.status !== 'graded' || !marker.gradedAssetId) continue;
+
+      // A graded copy someone deleted is not a replacement worth moving the original out for.
+      const graded = await immich.getAsset(marker.gradedAssetId);
+      if (graded.isTrashed) {
+        log.warn('the graded version is in the trash, leaving the albums alone', { ...fields, gradedAssetId: graded.id });
+        continue;
+      }
+
+      if (listOnly) {
+        const albums = await immich.albumsContaining(asset.id);
+        if (albums.length > 0) console.log(`${asset.id}  ${asset.originalFileName}  ${albums.map((album) => album.albumName).join(', ')}`);
+        continue;
+      }
+
+      const albums = await replaceInAlbums(immich, graded.id, [asset.id], fields);
+      if (albums > 0) {
+        tally.clips += 1;
+        tally.albums += albums;
+      }
+    } catch (error) {
+      tally.failed += 1;
+      log.error('could not sync the albums', { ...fields, error: errorMessage(error) });
+    }
+  }
+
+  if (!listOnly) log.info('album sync complete', tally);
+  return tally.failed > 0 ? 1 : 0;
 }
 
 /**

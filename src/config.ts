@@ -87,6 +87,8 @@ export function loadConfig() {
     gradedTag: optionalEnv('GRADED_TAG', 'Rec709 graded'),
     /** Hides the S-Log original from the main timeline. Stacking already collapses it. */
     archiveOriginal: booleanEnv('ARCHIVE_ORIGINAL', false),
+    /** Swaps the original, and on a regrade the graded copy it replaces, for the new graded copy in albums. */
+    replaceInAlbums: booleanEnv('REPLACE_IN_ALBUMS', true),
 
     concurrency: numberEnv('CONCURRENCY', 1),
     keepWorkFiles: booleanEnv('KEEP_WORK_FILES', false),

@@ -2,6 +2,7 @@ import { mkdir, rm, stat } from 'node:fs/promises';
 import { join, parse as parsePath } from 'node:path';
 import type { Config } from './config.js';
 import { ImmichClient, type Asset } from './immich.js';
+import { replaceInAlbums } from './albums.js';
 import { detect, probe } from './detect.js';
 import { grade, verifyGraded } from './grade.js';
 import { tryLock, type Lock } from './lock.js';
@@ -193,11 +194,17 @@ export class Pipeline {
         await this.mark(upload.id, gradedMarker);
       }
 
+      const supersededId = marker?.gradedAssetId;
+
+      // Before the superseded copy goes to the trash, while its albums can still be found.
+      if (this.config.replaceInAlbums) {
+        await replaceInAlbums(this.immich, upload.id, [assetId, ...(supersededId ? [supersededId] : [])], fields);
+      }
+
       // Only once the replacement exists, so a failed encode or upload never
       // leaves the asset with nothing stacked over it. A byte identical re-encode
       // comes back as a duplicate of the asset being replaced, and that one has to
       // be kept rather than deleted.
-      const supersededId = marker?.gradedAssetId;
       if (supersededId && supersededId !== upload.id) {
         try {
           await this.immich.deleteAssets([supersededId]);

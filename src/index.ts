@@ -21,6 +21,9 @@ Commands:
                             that no longer match, replacing the old output
            [--asset ID]     --asset runs only the given asset, and regrades it
                             if it was already graded. Repeat it for more assets
+           [--sync-albums]  --sync-albums swaps originals in albums for their
+                            graded copies, without grading anything. With
+                            --list it prints them and changes nothing
   selftest                  Check the tools and verify the LUT renders known values correctly
 
 Configuration is read from the environment. See .env.example.`;

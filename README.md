@@ -141,9 +141,11 @@ Footage already exposed brighter than the meter, as S-Log3 is often shot, needs 
 | `asset.update` | writing the marker, and archiving the original when `ARCHIVE_ORIGINAL=true` |
 | `stack.create` | stacking the graded version over the original, when `STACK_ASSETS=true` |
 | `tag.create` and `tag.asset` | tagging both versions, when `TAG_ASSETS=true` |
-| `asset.delete` | replacing a superseded graded version, only on `backfill --force` or `--changed` |
+| `asset.delete` | replacing a superseded graded version, on `backfill --force`, `--changed`, or `--asset` |
+| `album.read` | finding the albums an original is in, when `REPLACE_IN_ALBUMS=true` |
+| `albumAsset.create` and `albumAsset.delete` | adding the graded version to those albums and taking the original out, when `REPLACE_IN_ALBUMS=true` |
 
-Turning `STACK_ASSETS` and `TAG_ASSETS` off leaves only the four `asset.` permissions.
+Turning `STACK_ASSETS`, `TAG_ASSETS`, and `REPLACE_IN_ALBUMS` off leaves only the `asset.` permissions.
 `GET /server/ping`, which the service calls at startup to fail fast on an unreachable server, is public and needs none of them.
 
 ## The published image
@@ -203,6 +205,22 @@ The id can be either the original or its graded copy, which is the one the Immic
 A graded copy is followed back to the original it was made from.
 
 Graded uploads are skipped by three independent checks: the `_rec709` filename suffix, the `graded-output` marker written before anything else happens, and the fact that FFmpeg does not copy Sony's acquisition metadata into the output, so the gamma detection finds nothing to act on.
+
+## Albums
+
+With `REPLACE_IN_ALBUMS=true`, the default, the graded version takes the original's place in every album the original is in.
+A regrade does the same with the graded version it replaces, before that one goes to the trash.
+An album only loses the original once the graded version has been added to it, so an album the API key cannot change, such as one shared by another user, is left as it was.
+
+Grading only happens on upload, so an original added to an album afterwards stays there until this runs:
+
+```
+docker compose exec slog-grader node dist/index.js backfill --sync-albums --list
+docker compose exec slog-grader node dist/index.js backfill --sync-albums
+```
+
+`--list` prints each original that would be swapped and the albums it is in, and changes nothing.
+It downloads nothing, so it is quick, and it leaves alone any clip whose graded version is in the trash.
 
 ## Notes
 

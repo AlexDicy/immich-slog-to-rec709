@@ -48,6 +48,12 @@ export interface UploadResult {
   status: 'created' | 'duplicate';
 }
 
+export interface BulkIdResult {
+  id: string;
+  success: boolean;
+  error?: 'duplicate' | 'no_permission' | 'not_found' | 'unknown' | 'validation';
+}
+
 export interface MetadataItem {
   key: string;
   value: Record<string, unknown>;
@@ -199,6 +205,18 @@ export class ImmichClient {
    */
   async deleteAssets(assetIds: string[], options: { permanent?: boolean } = {}): Promise<void> {
     await this.json('DELETE', '/assets', { ids: assetIds, force: options.permanent ?? false });
+  }
+
+  async albumsContaining(assetId: string): Promise<{ id: string; albumName: string }[]> {
+    return this.json('GET', `/albums?assetId=${assetId}`);
+  }
+
+  async addAssetsToAlbum(albumId: string, assetIds: string[]): Promise<BulkIdResult[]> {
+    return this.json('PUT', `/albums/${albumId}/assets`, { ids: assetIds });
+  }
+
+  async removeAssetsFromAlbum(albumId: string, assetIds: string[]): Promise<BulkIdResult[]> {
+    return this.json('DELETE', `/albums/${albumId}/assets`, { ids: assetIds });
   }
 
   async setVisibility(assetIds: string[], visibility: 'timeline' | 'archive'): Promise<void> {
