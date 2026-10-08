@@ -1,6 +1,28 @@
 import type { BulkIdResult, ImmichClient } from './immich.js';
 import { log, errorMessage } from './log.js';
 
+export interface Album {
+  id: string;
+  albumName: string;
+}
+
+/**
+ * Every album holding one of the assets, less those excluded by name or id. The
+ * server cannot tell an album synced from a phone folder apart from one made by
+ * hand, so those have to be named for them to be left alone.
+ */
+export async function albumsToUpdate(immich: ImmichClient, assetIds: string[], exclude: string[]): Promise<Album[]> {
+  const excluded = new Set(exclude.map((entry) => entry.toLowerCase()));
+  const byId = new Map<string, Album>();
+  for (const albums of await Promise.all(assetIds.map((id) => immich.albumsContaining(id)))) {
+    for (const album of albums) {
+      if (excluded.has(album.id.toLowerCase()) || excluded.has(album.albumName.toLowerCase())) continue;
+      byId.set(album.id, album);
+    }
+  }
+  return [...byId.values()];
+}
+
 /**
  * Puts the graded copy in every album holding one of the replaced assets, the
  * original or a graded copy being superseded, and takes those out, so the album
@@ -13,34 +35,36 @@ export async function replaceInAlbums(
   immich: ImmichClient,
   gradedId: string,
   replacedIds: string[],
+  exclude: string[],
   fields: Record<string, unknown>,
 ): Promise<number> {
   const toReplace = replacedIds.filter((id) => id !== gradedId);
   if (toReplace.length === 0) return 0;
 
-  let albumIds: Set<string>;
+  let albums: Album[];
   try {
-    albumIds = new Set((await Promise.all(toReplace.map((id) => immich.albumsContaining(id)))).flat().map((album) => album.id));
+    albums = await albumsToUpdate(immich, toReplace, exclude);
   } catch (error) {
     log.warn('could not look up the albums to update', { ...fields, error: errorMessage(error) });
     return 0;
   }
 
   let updated = 0;
-  for (const albumId of albumIds) {
+  for (const album of albums) {
+    const albumFields = { ...fields, album: album.albumName };
     try {
-      const notAdded = failures(await immich.addAssetsToAlbum(albumId, [gradedId]), 'duplicate');
+      const notAdded = failures(await immich.addAssetsToAlbum(album.id, [gradedId]), 'duplicate');
       if (notAdded.length > 0) {
-        log.warn('could not add the graded version to an album, leaving the album as it was', { ...fields, albumId, reason: notAdded.join(',') });
+        log.warn('could not add the graded version to an album, leaving the album as it was', { ...albumFields, reason: notAdded.join(',') });
         continue;
       }
-      const notRemoved = failures(await immich.removeAssetsFromAlbum(albumId, toReplace), 'not_found');
+      const notRemoved = failures(await immich.removeAssetsFromAlbum(album.id, toReplace), 'not_found');
       if (notRemoved.length > 0) {
-        log.warn('added the graded version to an album but could not remove what it replaces', { ...fields, albumId, reason: notRemoved.join(',') });
+        log.warn('added the graded version to an album but could not remove what it replaces', { ...albumFields, reason: notRemoved.join(',') });
       }
       updated += 1;
     } catch (error) {
-      log.warn('could not update an album', { ...fields, albumId, error: errorMessage(error) });
+      log.warn('could not update an album', { ...albumFields, error: errorMessage(error) });
     }
   }
 

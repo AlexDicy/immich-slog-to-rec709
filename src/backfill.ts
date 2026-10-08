@@ -1,5 +1,5 @@
 import type { Config } from './config.js';
-import { replaceInAlbums } from './albums.js';
+import { albumsToUpdate, replaceInAlbums } from './albums.js';
 import { isAssetId, type Asset, type ImmichClient } from './immich.js';
 import type { Marker, Pipeline } from './pipeline.js';
 import { Queue } from './queue.js';
@@ -189,12 +189,12 @@ async function syncAlbums(config: Config, immich: ImmichClient, listOnly: boolea
       }
 
       if (listOnly) {
-        const albums = await immich.albumsContaining(asset.id);
+        const albums = await albumsToUpdate(immich, [asset.id], config.albumExclude);
         if (albums.length > 0) console.log(`${asset.id}  ${asset.originalFileName}  ${albums.map((album) => album.albumName).join(', ')}`);
         continue;
       }
 
-      const albums = await replaceInAlbums(immich, graded.id, [asset.id], fields);
+      const albums = await replaceInAlbums(immich, graded.id, [asset.id], config.albumExclude, fields);
       if (albums > 0) {
         tally.clips += 1;
         tally.albums += albums;

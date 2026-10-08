@@ -89,6 +89,8 @@ export function loadConfig() {
     archiveOriginal: booleanEnv('ARCHIVE_ORIGINAL', false),
     /** Swaps the original, and on a regrade the graded copy it replaces, for the new graded copy in albums. */
     replaceInAlbums: booleanEnv('REPLACE_IN_ALBUMS', true),
+    /** Album names or ids never touched, such as albums synced from a phone folder. */
+    albumExclude: listEnv('ALBUM_EXCLUDE', []),
 
     concurrency: numberEnv('CONCURRENCY', 1),
     keepWorkFiles: booleanEnv('KEEP_WORK_FILES', false),

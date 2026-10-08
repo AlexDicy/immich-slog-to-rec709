@@ -236,6 +236,9 @@ With `REPLACE_IN_ALBUMS=true`, the default, the graded version takes the origina
 A regrade does the same with the graded version it replaces, before that one goes to the trash.
 An album only loses the original once the graded version has been added to it, so an album the API key cannot change, such as one shared by another user, is left as it was.
 
+Albums named in `ALBUM_EXCLUDE`, by name or id, are never touched.
+List any album the Immich app keeps in sync with a folder on your phone: the server cannot tell those apart from albums made by hand, and the app would otherwise put the originals back.
+
 Grading only happens on upload, so an original added to an album afterwards stays there until this runs:
 
 ```

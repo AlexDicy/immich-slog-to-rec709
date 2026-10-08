@@ -198,7 +198,7 @@ export class Pipeline {
 
       // Before the superseded copy goes to the trash, while its albums can still be found.
       if (this.config.replaceInAlbums) {
-        await replaceInAlbums(this.immich, upload.id, [assetId, ...(supersededId ? [supersededId] : [])], fields);
+        await replaceInAlbums(this.immich, upload.id, [assetId, ...(supersededId ? [supersededId] : [])], this.config.albumExclude, fields);
       }
 
       // Only once the replacement exists, so a failed encode or upload never
