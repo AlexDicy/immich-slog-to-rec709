@@ -173,6 +173,30 @@ docker compose exec slog-grader node dist/index.js backfill
 `--list` prints candidates without downloading anything.
 Start with `--limit 1` and look at the result in Immich before running the whole library.
 
+### Running a long backfill in the background
+
+A whole library can take hours, and `docker compose exec` stops the backfill when its terminal closes.
+From a shell inside the container (`docker compose exec slog-grader sh`), `nohup` keeps it running and writes the log to the work volume:
+
+```
+nohup node dist/index.js backfill > /work/backfill.log 2>&1 &
+nohup node dist/index.js backfill --changed > /work/backfill.log 2>&1 &
+nohup node dist/index.js backfill --sync-albums > /work/backfill.log 2>&1 &
+tail -f /work/backfill.log
+```
+
+Stopping `tail` with Ctrl+C leaves the backfill running.
+Start one backfill at a time: two runs never grade the same clip at once, but they compete for the CPU.
+The image has no `ps` or `pkill`, so these read `/proc` instead. The first lists running backfills, the second stops them along with the FFmpeg or exiftool each one started:
+
+```
+for p in /proc/[0-9]*; do case "$(readlink $p/exe 2>/dev/null)" in */node) c=$(tr '\0' ' ' < $p/cmdline); case "$c" in *"dist/index.js backfill"*) echo "${p#/proc/}  $c";; esac;; esac; done
+for p in /proc/[0-9]*; do case "$(readlink $p/exe 2>/dev/null)" in */node) case "$(tr '\0' ' ' < $p/cmdline)" in *"dist/index.js backfill"*) pid=${p#/proc/}; children=$(grep -l "^PPid:[[:space:]]*$pid\$" /proc/[0-9]*/status 2>/dev/null | cut -d/ -f3); kill $pid $children; echo "stopped $pid $children";; esac;; esac; done
+```
+
+Neither touches the `serve` process.
+A stopped clip's lock is taken over once it has gone stale for two and a half minutes, so a backfill started sooner skips that clip and leaves it for the next run.
+
 ## Reprocessing
 
 Every asset it touches gets a `slog-grader` metadata key recording the decision, which is also how it avoids doing the same work twice.
