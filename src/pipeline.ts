@@ -3,7 +3,7 @@ import { join, parse as parsePath } from 'node:path';
 import type { Config } from './config.js';
 import { ImmichClient, type Asset } from './immich.js';
 import { detect, probe } from './detect.js';
-import { grade } from './grade.js';
+import { grade, verifyGraded } from './grade.js';
 import { tryLock, type Lock } from './lock.js';
 import { writeSourceMetadata } from './metadata.js';
 import { currentSettings, type EncodeSettings } from './settings.js';
@@ -162,6 +162,7 @@ export class Pipeline {
       await grade(this.config, { inputPath: originalPath, outputPath: gradedPath, probe: sourceProbe });
 
       await writeSourceMetadata(this.config, gradedPath, asset.exifInfo);
+      await verifyGraded(this.config, gradedPath, sourceProbe);
 
       const settings = await currentSettings(this.config);
       const gradedMarker: Marker = {

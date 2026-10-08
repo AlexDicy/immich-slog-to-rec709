@@ -10,6 +10,8 @@ export interface Probe {
   colorPrimaries: string | null;
   colorTransfer: string | null;
   frameRate: string | null;
+  /** Seconds of video, which can be shorter than the container when a track is cut short. */
+  videoDuration: number | null;
   hasAudio: boolean;
 }
 
@@ -117,7 +119,7 @@ export async function probe(config: Config, filePath: string): Promise<Probe> {
       '-v', 'error',
       '-print_format', 'json',
       '-show_streams',
-      '-show_entries', 'stream=index,codec_type,width,height,pix_fmt,color_range,color_primaries,color_transfer,r_frame_rate',
+      '-show_entries', 'stream=index,codec_type,width,height,pix_fmt,color_range,color_primaries,color_transfer,r_frame_rate,duration',
       filePath,
     ],
     { timeoutMs: 5 * 60 * 1000 },
@@ -136,6 +138,7 @@ export async function probe(config: Config, filePath: string): Promise<Probe> {
     colorPrimaries: (video['color_primaries'] as string | undefined) ?? null,
     colorTransfer: (video['color_transfer'] as string | undefined) ?? null,
     frameRate: (video['r_frame_rate'] as string | undefined) ?? null,
+    videoDuration: Number.isFinite(Number(video['duration'])) ? Number(video['duration']) : null,
     hasAudio: streams.some((stream) => stream['codec_type'] === 'audio'),
   };
 }

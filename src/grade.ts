@@ -1,6 +1,6 @@
 import type { Config } from './config.js';
 import { run } from './exec.js';
-import type { Probe } from './detect.js';
+import { probe, type Probe } from './detect.js';
 import { log } from './log.js';
 import { shiftExposureExpression } from './slog3.js';
 
@@ -123,4 +123,28 @@ export async function grade(config: Config, options: GradeOptions): Promise<void
   const { stderr } = await run(config.ffmpegPath, args);
   if (stderr.trim()) log.debug('ffmpeg output', { stderr: stderr.trim().split('\n').slice(-5).join(' | ') });
   log.info('graded clip', { seconds: Math.round((Date.now() - started) / 1000) });
+}
+
+/** Generous next to a frame, tight next to a track that stops seconds early. */
+const DURATION_TOLERANCE_SECONDS = 0.5;
+
+/**
+ * Decodes the whole graded file before it is uploaded. ffmpeg can finish without
+ * complaint and still leave an unplayable file behind, such as when another
+ * process wrote to the same path, and Immich would accept it and stack it over
+ * the original as though it were fine.
+ */
+export async function verifyGraded(config: Config, gradedPath: string, source: Probe): Promise<void> {
+  const graded = await probe(config, gradedPath);
+
+  const { stderr } = await run(config.ffmpegPath, ['-nostdin', '-hide_banner', '-loglevel', 'error', '-i', gradedPath, '-map', '0', '-f', 'null', '-']);
+  if (stderr.trim()) {
+    throw new Error(`graded file does not decode cleanly: ${stderr.trim().split('\n').slice(0, 3).join(' | ')}`);
+  }
+
+  if (source.videoDuration !== null) {
+    if (graded.videoDuration === null || Math.abs(graded.videoDuration - source.videoDuration) > DURATION_TOLERANCE_SECONDS) {
+      throw new Error(`graded video lasts ${graded.videoDuration ?? 'unknown'}s but the source lasts ${source.videoDuration}s`);
+    }
+  }
 }
