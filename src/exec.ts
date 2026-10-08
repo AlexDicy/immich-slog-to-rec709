@@ -12,10 +12,12 @@ export class CommandError extends Error {
   constructor(
     readonly command: string,
     readonly code: number | null,
+    readonly signal: NodeJS.Signals | null,
     readonly stderr: string,
   ) {
     const tail = stderr.trim().split('\n').slice(-12).join('\n');
-    super(`${command} exited with code ${code}${tail ? `\n${tail}` : ''}`);
+    const outcome = code === null ? `was killed by ${signal}` : `exited with code ${code}`;
+    super(`${command} ${outcome}${tail ? `\n${tail}` : ''}`);
     this.name = 'CommandError';
   }
 }
@@ -54,11 +56,11 @@ function spawnCollect(command: string, args: string[], options: RunOptions): Pro
 
     child.on('error', (error) => settle(() => reject(new Error(`failed to start ${command}: ${error.message}`))));
 
-    child.on('close', (code) => {
+    child.on('close', (code, signal) => {
       settle(() => {
         const stderr = Buffer.concat(stderrChunks).toString('utf8');
         if (code === 0) resolve({ stdout: Buffer.concat(stdoutChunks), stderr });
-        else reject(new CommandError(command, code, stderr));
+        else reject(new CommandError(command, code, signal, stderr));
       });
     });
 
