@@ -4,6 +4,7 @@ import type { Config } from './config.js';
 import { ImmichClient, type Asset } from './immich.js';
 import { detect, probe } from './detect.js';
 import { grade } from './grade.js';
+import { tryLock, type Lock } from './lock.js';
 import { writeSourceMetadata } from './metadata.js';
 import { currentSettings, type EncodeSettings } from './settings.js';
 import { log, errorMessage } from './log.js';
@@ -72,6 +73,31 @@ export class Pipeline {
   async process(assetId: string, options: { reprocess?: boolean } = {}): Promise<Outcome> {
     const reprocess = options.reprocess ?? false;
     const asset = await this.immich.getAsset(assetId);
+    const fields = { assetId, file: asset.originalFileName };
+
+    let lock: Lock | null;
+    try {
+      lock = await tryLock(join(this.config.workDir, `${assetId}.lock`));
+    } catch (error) {
+      log.error('processing failed', { ...fields, error: errorMessage(error) });
+      return { action: 'failed', reason: errorMessage(error) };
+    }
+    if (!lock) {
+      const reason = 'another process is already working on this asset';
+      log.warn('skipping', { ...fields, reason });
+      return { action: 'skipped', reason };
+    }
+
+    try {
+      return await this.processLocked(asset, reprocess);
+    } finally {
+      await lock.release().catch((error) => log.warn('could not release the lock', { ...fields, error: errorMessage(error) }));
+    }
+  }
+
+  /** Screened only once the lock is held, so a run that just finished the asset has already marked it. */
+  private async processLocked(asset: Asset, reprocess: boolean): Promise<Outcome> {
+    const assetId = asset.id;
     const fields = { assetId, file: asset.originalFileName };
 
     const { skip: skipReason, marker } = await this.screen(asset, reprocess);
